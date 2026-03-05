@@ -105,6 +105,13 @@ private:
     std::vector<Triangle> tris_;
     std::vector<BVHNode>  bvh_;
 
+    // Persisted index ordering from BVH build.
+    // BVH leaf nodes store [triBegin, triEnd) ranges into this array,
+    // and triOrder_[i] gives the actual index into tris_.
+    // This is necessary because buildBVHRecursive reorders the index
+    // array via nth_element during construction.
+    std::vector<uint32_t> triOrder_;
+
     // ── colour data ───────────────────────────────────────────────────────────
     std::vector<Color3f> colors_;
 

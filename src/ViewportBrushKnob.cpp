@@ -1,7 +1,7 @@
 #include "ViewportBrushKnob.h"
-#include <fdk/math/Mat4.h>   // brings in windows.h + GL/glew.h in correct order
+#include "AttributePainterOp.h"
+#include <fdk/math/Mat4.h>   // fdk::Mat4d for camera worldTransform()
 #include <DDImage/AxisOp.h>
-
 #include <DDImage/ViewerContext.h>
 #include <DDImage/Matrix4.h>
 #include <DDImage/Vector3.h>
@@ -11,8 +11,6 @@
 #include <algorithm>
 
 // ── Portable PI ───────────────────────────────────────────────────────────────
-// AP_PIf is a GNU extension; not available on MSVC even with _USE_MATH_DEFINES.
-// Define our own to keep this file self-contained.
 #ifndef AP_PIf
 static constexpr float AP_PIf = 3.14159265358979323846f;
 #endif
@@ -31,9 +29,6 @@ ViewportBrushKnob::ViewportBrushKnob(DD::Image::Knob_Closure* kc, AttributePaint
 
 Ray ViewportBrushKnob::buildRay(DD::Image::ViewerContext* ctx,
                                  float sx, float sy) const {
-    // Nuke provides camera matrices via ctx
-    // Use unproject: take NDC coords → world space
-
     // Viewport dimensions
     int vpW = ctx->viewport().w();
     int vpH = ctx->viewport().h();
@@ -43,7 +38,6 @@ Ray ViewportBrushKnob::buildRay(DD::Image::ViewerContext* ctx,
     float ndcY = 1.f - (2.f * sy / float(vpH)); // flip Y
 
     // Fetch projection + modelview from ctx
-    // Nuke uses DD::Image::Matrix4
     DD::Image::Matrix4 proj     = ctx->proj_matrix();
     DD::Image::Matrix4 modelview = DD::Image::Matrix4::identity();
     if (ctx->camera()) {
@@ -93,8 +87,6 @@ void ViewportBrushKnob::handleMouseMove(DD::Image::ViewerContext* ctx) {
     mouseX_ = (float)ctx->mouse_x();
     mouseY_ = (float)ctx->mouse_y();
     updateHit(ctx);
-    // redraw handled by Nuke // trigger redraw for overlay
-
 }
 
 void ViewportBrushKnob::handleMouseDown(DD::Image::ViewerContext* ctx) {
@@ -111,7 +103,6 @@ void ViewportBrushKnob::handleMouseDown(DD::Image::ViewerContext* ctx) {
         if (onPaint_) onPaint_(lastHit_.position, lastHit_.normal, true);
         firstTick_ = false;
     }
-
 }
 
 void ViewportBrushKnob::handleMouseDrag(DD::Image::ViewerContext* ctx) {
@@ -123,17 +114,12 @@ void ViewportBrushKnob::handleMouseDrag(DD::Image::ViewerContext* ctx) {
 
     if (hitValid_ && onPaint_)
         onPaint_(lastHit_.position, lastHit_.normal, false);
-
-    // redraw handled by Nuke
-
 }
 
 void ViewportBrushKnob::handleMouseUp(DD::Image::ViewerContext* ctx) {
     if (!painting_) return;
     painting_ = false;
     if (onStrokeEnd_) onStrokeEnd_();
-    // redraw handled by Nuke
-
 }
 
 void ViewportBrushKnob::handleMouseScroll(DD::Image::ViewerContext* ctx) {
@@ -142,18 +128,30 @@ void ViewportBrushKnob::handleMouseScroll(DD::Image::ViewerContext* ctx) {
     if (ctx->state() & DD::Image::CTRL) {
         float delta = (ctx->wheel_dy() > 0) ? 1.1f : (1.f/1.1f);
         brushState_.radius = std::clamp(brushState_.radius * delta, 0.001f, 100.0f);
-        // redraw handled by Nuke
-    
     }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  GL Overlay — draw brush circle
+//  GL Overlay — build_handle + draw_handle
+//
+//  IMPORTANT: For Nuke to route mouse events (PUSH, DRAG, RELEASE) to a
+//  custom knob, the knob must register a pickable handle region during the
+//  draw pass using begin_handle / end_handle (or make_handle).
+//
+//  Without this registration, all mouse events go to Nuke's default viewer
+//  navigation (tumble/pan/zoom) and the brush never receives input.
+//
+//  The flow:
+//    1. build_handle() returns true → Nuke knows to call draw_handle()
+//    2. During DRAW_LINES/DRAW_OPAQUE passes, we call begin_handle() to
+//       register our pick region, draw our overlay, then end_handle()
+//    3. When the user clicks/drags over our registered region, Nuke routes
+//       PUSH/DRAG/RELEASE events to our draw_handle()
 // ─────────────────────────────────────────────────────────────────────────────
 
 bool ViewportBrushKnob::build_handle(DD::Image::ViewerContext* ctx) {
-    // Return true so add_draw_handle registers draw_handle as callback
+    // Return true so Nuke registers draw_handle as a callback.
+    // This is the registration phase — no GL calls here.
     return enabled_;
 }
 
@@ -161,16 +159,30 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
     using namespace DD::Image;
     const ViewerEvent ev = ctx->event();
 
-    // Mouse event dispatch
-    if (ev == MOVE || ev == HOVER_MOVE) { handleMouseMove(ctx); return; }
-    if (ev == PUSH)                     { handleMouseDown(ctx); return; }
-    if (ev == DRAG)                     { handleMouseDrag(ctx); return; }
-    if (ev == RELEASE)                  { handleMouseUp(ctx);   return; }
+    // ── Drawing passes ──────────────────────────────────────────────────────
+    // During draw passes, register a pickable handle region so that Nuke
+    // routes subsequent mouse events to us instead of the viewer navigation.
+    if (ev == DRAW_OPAQUE || ev == DRAW_LINES || ev == DRAW_OVERLAY) {
+        // Register pick region on ALL draw passes so Nuke routes mouse
+        // events to us, but only render the overlay during DRAW_OVERLAY.
+        // DRAW_OVERLAY runs after all opaque geometry is rendered, so
+        // with depth testing disabled the brush always draws on top.
+        begin_handle(Knob::ANYWHERE, ctx, nullptr, 0, 0, 0);
 
-    // Drawing passes
-    if (!hitValid_) return;
-    if (ev == DRAW_OPAQUE || ev == DRAW_LINES || ev == DRAW_OVERLAY)
-        drawBrushCircle(ctx);
+        if (ev == DRAW_OVERLAY && hitValid_)
+            drawBrushCircle(ctx);
+
+        end_handle(ctx);
+        return;
+    }
+
+    // ── Mouse event dispatch ────────────────────────────────────────────────
+    // These events only arrive if we successfully registered a pick region
+    // above during a prior draw pass.
+    if (ev == MOVE || ev == HOVER_MOVE) { handleMouseMove(ctx);   return; }
+    if (ev == PUSH)                     { handleMouseDown(ctx);   return; }
+    if (ev == DRAG)                     { handleMouseDrag(ctx);   return; }
+    if (ev == RELEASE)                  { handleMouseUp(ctx);     return; }
 }
 
 void ViewportBrushKnob::drawBrushCircle(DD::Image::ViewerContext* ctx) const {
@@ -196,8 +208,10 @@ void ViewportBrushKnob::drawBrushCircle(DD::Image::ViewerContext* ctx) const {
     float r = brushState_.radius;
 
     // ── Outer ring ──────────────────────────────────────────────────────────
-    glPushAttrib(GL_LINE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
-    glDepthFunc(GL_LEQUAL);
+    glPushAttrib(GL_LINE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_ENABLE_BIT);
+    glDisable(GL_DEPTH_TEST);   // always draw on top of mesh geometry
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glLineWidth(2.0f);
     glColor4f(1.f, 1.f, 1.f, 0.9f);
 

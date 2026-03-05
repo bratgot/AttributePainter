@@ -7,9 +7,9 @@
 
 namespace AP {
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 //  KdTree
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 void KdTree::build(const std::vector<Vec3f>& points) {
     nodes_.clear();
@@ -27,24 +27,12 @@ void KdTree::build(const std::vector<Vec3f>& points) {
 int KdTree::buildRecursive(std::vector<std::pair<Vec3f,uint32_t>>& pts,
                             int lo, int hi, int depth) {
     if (lo >= hi) return -1;
-    int axis = depth % 3;
-    int mid  = lo + (hi - lo) / 2;
 
-    // Partial sort on median
-    std::nth_element(pts.begin() + lo, pts.begin() + mid, pts.begin() + hi,
-        [axis](const auto& a, const auto& b) {
-            return (&a.first.x)[axis] < (&b.first.x)[axis];
-        });
-
-    int nodeIdx = (int)nodes_.size() - (int)pts.size() + mid;
-    // We pre-reserved, so reuse the mid position
-    nodeIdx = mid; // nodes_ is indexed the same as pts after this approach
-    // Use a simpler index-stable approach:
+    // Build using a thread-local temp buffer and recursive lambda.
+    // The outer call drives the whole build in one shot from [0, size).
     static thread_local std::vector<KdNode> tmp;
     tmp.resize(pts.size());
 
-    // Iterative median-split build into contiguous array
-    // (recursive lambda via std::function for clarity)
     std::function<int(int,int,int)> build = [&](int l, int h, int d) -> int {
         if (l >= h) return -1;
         int ax = d % 3;
@@ -88,7 +76,7 @@ void KdTree::queryRecursive(int ni, const Vec3f& center, float radiusSq,
     float axisDistSq = axisDist * axisDist;
 
     // Visit nearer child first
-    int nearIdx = (axisDist < 0) ? node.left : node.right; // nearIdx
+    int nearIdx = (axisDist < 0) ? node.left : node.right;
     int farIdx  = (axisDist < 0) ? node.right : node.left;
 
     queryRecursive(nearIdx, center, radiusSq, out);
@@ -96,9 +84,9 @@ void KdTree::queryRecursive(int ni, const Vec3f& center, float radiusSq,
         queryRecursive(farIdx, center, radiusSq, out);
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-//  MeshSampler â€” rebuild
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
+//  MeshSampler — rebuild
+// ─────────────────────────────────────────────────────────────────────────────
 
 void MeshSampler::rebuild(const std::vector<Vec3f>& worldPoints,
                            const std::vector<int>&   faceVertCounts,
@@ -111,7 +99,10 @@ void MeshSampler::rebuild(const std::vector<Vec3f>& worldPoints,
 
     tessellateFaces();
     buildBVH();
-    //kdTree_.build(points_);
+
+    // FIX: KdTree must be built for verticesInRadius() to work.
+    // Without this, painting queries return zero vertices.
+    kdTree_.build(points_);
 }
 
 void MeshSampler::tessellateFaces() {
@@ -137,11 +128,30 @@ void MeshSampler::tessellateFaces() {
     }
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 //  BVH construction
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+//  FIX: The original buildBVH() was a no-op (just cleared the vector),
+//  which meant intersect() always returned immediately with no hit.
+//  This broke the entire brush overlay — hitValid_ was never true.
+// ─────────────────────────────────────────────────────────────────────────────
 
-void MeshSampler::buildBVH() { bvh_.clear(); }
+void MeshSampler::buildBVH() {
+    bvh_.clear();
+    triOrder_.clear();
+    if (tris_.empty()) return;
+
+    // Build index list [0, 1, 2, ... N-1] and recursively partition.
+    // buildBVHRecursive reorders this array via nth_element, so BVH leaf
+    // nodes store ranges into this reordered array. We persist it as
+    // triOrder_ so that intersect() can map leaf ranges back to tris_.
+    std::vector<uint32_t> indices(tris_.size());
+    std::iota(indices.begin(), indices.end(), 0u);
+    buildBVHRecursive(indices, 0, (int)indices.size(), 0);
+
+    // Persist the reordered index array for use during traversal
+    triOrder_ = std::move(indices);
+}
 
 int MeshSampler::buildBVHRecursive(std::vector<uint32_t>& idx, int lo, int hi, int depth) {
     BVHNode node;
@@ -158,14 +168,14 @@ int MeshSampler::buildBVHRecursive(std::vector<uint32_t>& idx, int lo, int hi, i
 
     int count = hi - lo;
     if (count <= 4 || depth > 20) {
-        // Leaf
-        node.triBegin = (uint32_t)bvh_.size() + 1; // placeholder, set after push
-        // Store triangle indices contiguously after reordering
-        // (we store absolute triangle indices in leaf range)
+        // Leaf — store the triangle index range.
+        // We need the tris_ array to be reordered so that the triangles
+        // referenced by idx[lo..hi) are contiguous. Since we're building
+        // in-place, we reorder tris_ to match the idx ordering now.
+        // The leaf stores absolute indices into tris_.
+        // After the full build, tris_ order matches the BVH leaf order.
         node.triBegin = (uint32_t)lo;
         node.triEnd   = (uint32_t)hi;
-        // Reorder tris_ to match idx order in [lo,hi]
-        // (done once at end â€” for now store idx range)
         int nodeIdx = (int)bvh_.size();
         bvh_.push_back(node);
         return nodeIdx;
@@ -201,9 +211,9 @@ int MeshSampler::buildBVHRecursive(std::vector<uint32_t>& idx, int lo, int hi, i
     return nodeIdx;
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 //  Ray-AABB slab test (returns tMin)
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 bool MeshSampler::intersectAABB(const BVHNode& node, const Ray& ray, float& tMin) const {
     float tmax = 1e30f;
@@ -228,9 +238,9 @@ bool MeshSampler::intersectAABB(const BVHNode& node, const Ray& ray, float& tMin
     return tmax >= 0.f;
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-//  MÃ¶llerâ€“Trumbore ray-triangle intersection
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
+//  Möller–Trumbore ray-triangle intersection
+// ─────────────────────────────────────────────────────────────────────────────
 
 bool MeshSampler::intersectTri(const Triangle& tri, const Ray& ray,
                                 float& t, Vec3f& n) const {
@@ -257,9 +267,19 @@ bool MeshSampler::intersectTri(const Triangle& tri, const Ray& ray,
     return true;
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 //  Public: intersect
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+//  NOTE: The BVH leaf nodes store index ranges into the `idx` array that
+//  was used during construction. Since buildBVHRecursive reorders `idx`
+//  via nth_element, the leaf ranges [triBegin, triEnd) are indices into
+//  that reordered array — NOT into tris_ directly. We need to look up
+//  through the idx indirection.
+//
+//  However, the current design stores the idx array only on the stack
+//  during buildBVH(). To fix this properly we persist the reordered
+//  index array. See triOrder_ below.
+// ─────────────────────────────────────────────────────────────────────────────
 
 HitResult MeshSampler::intersect(const Ray& ray) const {
     HitResult result;
@@ -271,7 +291,7 @@ HitResult MeshSampler::intersect(const Ray& ray) const {
 
     while (!stack.empty()) {
         int ni = stack.top(); stack.pop();
-        if (ni < 0) continue;
+        if (ni < 0 || ni >= (int)bvh_.size()) continue;
         const BVHNode& node = bvh_[ni];
 
         float tAABB;
@@ -281,13 +301,15 @@ HitResult MeshSampler::intersect(const Ray& ray) const {
         bool isLeaf = (node.left < 0 && node.right < 0);
         if (isLeaf) {
             for (uint32_t ti = node.triBegin; ti < node.triEnd; ++ti) {
+                // ti indexes into triOrder_, which maps to tris_
+                uint32_t triIdx = (ti < triOrder_.size()) ? triOrder_[ti] : ti;
                 float t; Vec3f n;
-                if (intersectTri(tris_[ti], ray, t, n)) {
+                if (intersectTri(tris_[triIdx], ray, t, n)) {
                     if (t < result.t) {
                         result.hit       = true;
                         result.t         = t;
                         result.normal    = n;
-                        result.faceIndex = tris_[ti].faceIndex;
+                        result.faceIndex = tris_[triIdx].faceIndex;
                         result.position  = ray.origin + ray.dir * t;
                     }
                 }
@@ -300,9 +322,9 @@ HitResult MeshSampler::intersect(const Ray& ray) const {
     return result;
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 //  Public: verticesInRadius
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 void MeshSampler::verticesInRadius(const Vec3f& center, float radius,
                                     std::vector<std::pair<uint32_t,float>>& out) const {
@@ -312,9 +334,9 @@ void MeshSampler::verticesInRadius(const Vec3f& center, float radius,
         [](const auto& a, const auto& b){ return a.second < b.second; });
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 //  Colour accessors
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 Color3f MeshSampler::getColor(uint32_t idx) const {
     if (idx < colors_.size()) return colors_[idx];
@@ -329,5 +351,3 @@ void MeshSampler::initColors(const std::vector<Color3f>& initial) {
 }
 
 } // namespace AP
-
-

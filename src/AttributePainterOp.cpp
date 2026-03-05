@@ -23,9 +23,9 @@ PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace AP {
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 //  Static data
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 const char* const AttributePainterOp::kFalloffNames[] = {
     "Smooth", "Linear", "Constant", "Gaussian", nullptr
@@ -39,9 +39,9 @@ const DD::Image::Op::Description AttributePainterOp::description(
     AttributePainterOp::Build
 );
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 //  Constructor / Destructor
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 AttributePainterOp::AttributePainterOp(Node* node)
     : GeoOp(node)
@@ -51,9 +51,9 @@ AttributePainterOp::AttributePainterOp(Node* node)
 
 AttributePainterOp::~AttributePainterOp() = default;
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 //  Help text
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 const char* AttributePainterOp::node_help() const {
     return
@@ -61,31 +61,32 @@ const char* AttributePainterOp::node_help() const {
         "Interactive vertex colour painter for USD geometry in Nuke 17.\n"
         "Replicates Houdini's Attribute Paint SOP.\n\n"
         "Usage:\n"
-        "  â€¢ Connect a USD node to the input.\n"
-        "  â€¢ Set the USD Prim Path to the mesh you want to paint.\n"
-        "  â€¢ Press P or click in the 3D viewer to begin painting.\n"
-        "  â€¢ Ctrl+Scroll to resize the brush.\n"
-        "  â€¢ Ctrl+Z / Ctrl+Shift+Z for undo/redo.\n\n"
+        "  • Connect a USD node to the input.\n"
+        "  • Set the USD Prim Path to the mesh you want to paint.\n"
+        "  • Press P or click in the 3D viewer to begin painting.\n"
+        "  • Ctrl+Scroll to resize the brush.\n"
+        "  • Ctrl+Z / Ctrl+Shift+Z for undo/redo.\n\n"
         "Painted data is written as a 'vertex' interpolated primvar\n"
         "(default: 'displayColor') on the USD prim.\n";
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 //  Knobs
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
     // Passthrough GeoOp input knobs
     GeoOp::knobs(f);
 
-    // â”€â”€ USD target â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── USD target ──────────────────────────────────────────────────────────
+    DD::Image::Text_knob(f, "v0.1.0 - handle fixes");
     DD::Image::Divider(f, "USD Target");
     DD::Image::String_knob(f, &k_primPath_, "prim_path", "Prim Path");
     DD::Image::Tooltip(f, "SdfPath of the UsdGeomMesh to paint (e.g. /World/Body)");
     DD::Image::String_knob(f, &k_primvarName_, "primvar_name", "Primvar Name");
     DD::Image::Tooltip(f, "Name of the color primvar to write. Default: displayColor");
 
-    // â”€â”€ Brush â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Brush ───────────────────────────────────────────────────────────────
     DD::Image::Divider(f, "Brush");
     DD::Image::Bool_knob(f, &k_paintEnabled_, "paint_enabled", "Enable Paint");
     DD::Image::Bool_knob(f, &k_showBrush_,   "show_brush",    "Show Brush");
@@ -99,11 +100,11 @@ void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
     DD::Image::Enumeration_knob(f, &k_blend_,   kBlendNames,   "blend",   "Blend Mode");
     DD::Image::Color_knob(f, k_color_, "paint_color", "Color");
 
-    // â”€â”€ Misc â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Misc ────────────────────────────────────────────────────────────────
     DD::Image::Divider(f, "");
     DD::Image::Bool_knob(f, &k_flipNormals_, "flip_normals", "Flip Normals");
 
-    // â”€â”€ Viewport brush knob (invisible â€” only for 3D handle callbacks) â”€â”€â”€â”€â”€â”€
+    // ── Viewport brush knob (invisible — only for 3D handle callbacks) ──────
     // We use a custom knob so Nuke's handle system calls our draw/mouse methods.
     // Must be created LAST so it can reference the Op pointer.
     CustomKnob1(ViewportBrushKnob, f, this, "brush_handle");
@@ -120,9 +121,9 @@ int AttributePainterOp::knob_changed(DD::Image::Knob* k) {
     return GeoOp::knob_changed(k);
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 //  Brush state sync
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 void AttributePainterOp::syncBrushStateToKnobs() {
     if (!brushKnob_) return;
@@ -140,26 +141,19 @@ void AttributePainterOp::syncBrushStateToKnobs() {
     brushKnob_->setEnabled(k_paintEnabled_ && k_showBrush_);
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 //  USD stage extraction
-//  In Nuke 17, the USD stage is accessible via the input GeoOp's attachment.
-//  Nuke internally attaches a UsdStageData object to each GeoObject that came
-//  from a UsdNode. We cast through the attachment type map to retrieve it.
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 bool AttributePainterOp::extractStageFromInput(DD::Image::GeometryList& geoList) {
     // Walk all geo objects in the list looking for a USD stage attachment
     for (unsigned obj = 0; obj < geoList.size(); ++obj) {
         const DD::Image::GeoInfo& info = geoList[obj];
 
-        // Nuke 17 attaches the USD stage as a named group attribute.
-        // The attribute name used internally by the UsdReader node is
-        // "usdStage" and has type AT_POINTER (void*).
         const DD::Image::AttribContext* ctx =
             info.get_typed_group_attribcontext(DD::Image::Group_Object, "usdStage",
                                            DD::Image::POINTER_ATTRIB);
         if (ctx && ctx->attribute) {
-            // Retrieve the raw void* and reinterpret as UsdStageRefPtr*
             const DD::Image::Attribute* attr = &(*ctx->attribute);
             if (attr->size() > 0) {
                 auto* stagePtr = reinterpret_cast<UsdStageRefPtr*>(
@@ -175,9 +169,9 @@ bool AttributePainterOp::extractStageFromInput(DD::Image::GeometryList& geoList)
 }
 
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 //  Rebuild geometry (call when prim path or topology changes)
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 bool AttributePainterOp::rebuildGeometry() {
     if (!stage_) return false;
@@ -188,7 +182,7 @@ bool AttributePainterOp::rebuildGeometry() {
 
     UsdGeomMesh mesh(prim);
 
-    // â”€â”€ Points â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Points ──────────────────────────────────────────────────────────────
     VtArray<GfVec3f> vtPoints;
     mesh.GetPointsAttr().Get(&vtPoints);
 
@@ -201,7 +195,7 @@ bool AttributePainterOp::rebuildGeometry() {
         worldPts.push_back({ (float)pw[0], (float)pw[1], (float)pw[2] });
     }
 
-    // â”€â”€ Topology â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Topology ────────────────────────────────────────────────────────────
     VtArray<int> vtCounts, vtIndices;
     mesh.GetFaceVertexCountsAttr() .Get(&vtCounts);
     mesh.GetFaceVertexIndicesAttr().Get(&vtIndices);
@@ -209,7 +203,7 @@ bool AttributePainterOp::rebuildGeometry() {
     std::vector<int> faceCounts (vtCounts.begin(),  vtCounts.end());
     std::vector<int> faceIndices(vtIndices.begin(), vtIndices.end());
 
-    // â”€â”€ Rebuild sampler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Rebuild sampler ─────────────────────────────────────────────────────
     sampler_->rebuild(worldPts, faceCounts, faceIndices);
     if (brushKnob_) brushKnob_->setMeshSampler(sampler_.get());
     // Load existing colours from USD
@@ -222,9 +216,9 @@ bool AttributePainterOp::rebuildGeometry() {
     return true;
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-//  geometry_engine â€” called by Nuke to cook this node
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
+//  geometry_engine — called by Nuke to cook this node
+// ─────────────────────────────────────────────────────────────────────────────
 
 void AttributePainterOp::_validate(bool for_real) {
     GeoOp::_validate(for_real);
@@ -265,8 +259,27 @@ void AttributePainterOp::geometry_engine(DD::Image::Scene& scene,
     }
     geometryDirty_.store(false);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  build_handles / draw_handle
+//
+//  IMPORTANT: build_handles is the REGISTRATION phase only.
+//  No GL calls are allowed here — Nuke hasn't set up the GL context yet.
+//  All drawing must happen in draw_handle, which Nuke calls during the
+//  actual draw pass after registration is complete.
+//
+//  The flow is:
+//    1. Nuke calls build_handles() → we call add_draw_handle() to register
+//    2. Nuke calls draw_handle()   → we do GL drawing + event dispatch
+//    3. The custom knob's build_handle/draw_handle are called separately
+//       by Nuke's knob handle system — we do NOT call them manually.
+// ─────────────────────────────────────────────────────────────────────────────
+
 void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
+    // Let GeoOp register its built-in handles (transform, etc.)
     GeoOp::build_handles(ctx);
+
+    // Lazily grab the knob pointer and wire up callbacks
     if (!brushKnob_) {
         DD::Image::Knob* k = knob("brush_handle");
         brushKnob_ = dynamic_cast<ViewportBrushKnob*>(k);
@@ -280,16 +293,21 @@ void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
         }
     }
     syncBrushStateToKnobs();
-    if (brushKnob_) brushKnob_->draw_handle(ctx);
+
+    // Register ourselves for the draw pass — Nuke will call draw_handle() next
+    add_draw_handle(ctx);
 }
 
 void AttributePainterOp::draw_handle(DD::Image::ViewerContext* ctx) {
+    // Delegate all drawing and event handling to the brush knob.
+    // The knob handles its own begin_handle/end_handle for picking,
+    // draws the brush circle overlay, and dispatches mouse events.
     if (brushKnob_) brushKnob_->draw_handle(ctx);
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-//  onPaintTick â€” called each time the mouse moves while painting
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
+//  onPaintTick — called each time the mouse moves while painting
+// ─────────────────────────────────────────────────────────────────────────────
 
 void AttributePainterOp::onPaintTick(const Vec3f& pos,
                                       const Vec3f& normal,
@@ -331,9 +349,9 @@ void AttributePainterOp::onPaintTick(const Vec3f& pos,
     commitToUSD();
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-//  onStrokeEnd â€” finalize undo record and flush USD
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
+//  onStrokeEnd — finalize undo record and flush USD
+// ─────────────────────────────────────────────────────────────────────────────
 
 void AttributePainterOp::onStrokeEnd() {
     if (!sampler_) return;
@@ -352,9 +370,9 @@ void AttributePainterOp::onStrokeEnd() {
     invalidate();
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-//  commitToUSD â€” flush staged colour edits to the live USD stage
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
+//  commitToUSD — flush staged colour edits to the live USD stage
+// ─────────────────────────────────────────────────────────────────────────────
 
 void AttributePainterOp::commitToUSD() {
     if (!stage_) return;
@@ -368,9 +386,9 @@ void AttributePainterOp::commitToUSD() {
     writer_->clearStaged();
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-//  applyVertexColors â€” used by undo/redo
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
+//  applyVertexColors — used by undo/redo
+// ─────────────────────────────────────────────────────────────────────────────
 
 void AttributePainterOp::applyVertexColors(const std::vector<VertexColor>& vcs) {
     if (!sampler_) return;
@@ -383,4 +401,3 @@ void AttributePainterOp::applyVertexColors(const std::vector<VertexColor>& vcs) 
 }
 
 } // namespace AP
-
