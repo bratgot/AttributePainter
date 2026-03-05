@@ -1,0 +1,7 @@
+C:\dev\AttributePainter\src\plugin.cpp;C:\dev\AttributePainter\build\AttributePainter.dir\Release\plugin.obj
+C:\dev\AttributePainter\src\AttributePainterOp.cpp;C:\dev\AttributePainter\build\AttributePainter.dir\Release\AttributePainterOp.obj
+C:\dev\AttributePainter\src\ViewportBrushKnob.cpp;C:\dev\AttributePainter\build\AttributePainter.dir\Release\ViewportBrushKnob.obj
+C:\dev\AttributePainter\src\MeshSampler.cpp;C:\dev\AttributePainter\build\AttributePainter.dir\Release\MeshSampler.obj
+C:\dev\AttributePainter\src\BrushSystem.cpp;C:\dev\AttributePainter\build\AttributePainter.dir\Release\BrushSystem.obj
+C:\dev\AttributePainter\src\USDColorWriter.cpp;C:\dev\AttributePainter\build\AttributePainter.dir\Release\USDColorWriter.obj
+C:\dev\AttributePainter\src\UndoStack.cpp;C:\dev\AttributePainter\build\AttributePainter.dir\Release\UndoStack.obj

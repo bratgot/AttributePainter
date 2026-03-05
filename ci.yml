@@ -1,0 +1,240 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+  workflow_dispatch:       # allow manual trigger from the Actions tab
+
+# Cancel any in-progress run for the same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared CMake options injected into every matrix job
+# ─────────────────────────────────────────────────────────────────────────────
+env:
+  CMAKE_VERSION: "3.28"
+  # These stubs let the CMake configure step succeed even without a real Nuke
+  # install; full link validation is done only in the "real-sdk" self-hosted job.
+  STUB_NUKE_ROOT: "${{ github.workspace }}/stubs/nuke"
+  STUB_USD_ROOT:  "${{ github.workspace }}/stubs/usd"
+
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+# ─────────────────────────────────────────────────────────────────────────────
+#  1. Generate SDK stubs (shared across all platform jobs via cache)
+# ─────────────────────────────────────────────────────────────────────────────
+  generate-stubs:
+    name: Generate SDK stubs
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache stubs
+        id: cache-stubs
+        uses: actions/cache@v4
+        with:
+          path: stubs/
+          key: stubs-v2-${{ hashFiles('scripts/generate_stubs.sh') }}
+
+      - name: Build stubs
+        if: steps.cache-stubs.outputs.cache-hit != 'true'
+        run: bash scripts/generate_stubs.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdk-stubs
+          path: stubs/
+          retention-days: 1
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  2. Static analysis (clang-tidy, cppcheck) — Linux only
+# ─────────────────────────────────────────────────────────────────────────────
+  static-analysis:
+    name: Static Analysis
+    needs: generate-stubs
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: sdk-stubs, path: stubs/ }
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y clang-tidy cppcheck ninja-build
+
+      - name: Configure (export compile_commands.json)
+        run: |
+          cmake -B build-analysis -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DNUKE_ROOT="${STUB_NUKE_ROOT}" \
+            -DUSD_ROOT="${STUB_USD_ROOT}"
+
+      - name: Run clang-tidy
+        run: |
+          python3 scripts/run_clang_tidy.py \
+            -p build-analysis \
+            -header-filter="include/.*" \
+            src/*.cpp || true   # report but don't fail CI yet
+
+      - name: Run cppcheck
+        run: |
+          cppcheck \
+            --enable=warning,performance,portability \
+            --suppressions-list=scripts/cppcheck_suppressions.txt \
+            --error-exitcode=1 \
+            -I include \
+            -I "${STUB_NUKE_ROOT}/include" \
+            -I "${STUB_USD_ROOT}/include" \
+            src/ include/
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  3. Cross-platform compile matrix
+# ─────────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.name }})
+    needs: generate-stubs
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Linux GCC ─────────────────────────────────────────────────────
+          - name: "Linux-GCC-13"
+            os: ubuntu-24.04
+            cc: gcc-13
+            cxx: g++-13
+            generator: Ninja
+            build_type: Release
+            extra_flags: "-DCMAKE_CXX_FLAGS=-march=x86-64-v3"
+
+          # ── Linux Clang ───────────────────────────────────────────────────
+          - name: "Linux-Clang-17"
+            os: ubuntu-24.04
+            cc: clang-17
+            cxx: clang++-17
+            generator: Ninja
+            build_type: Release
+            extra_flags: ""
+
+          # ── Linux Debug (address sanitiser) ───────────────────────────────
+          - name: "Linux-ASAN"
+            os: ubuntu-24.04
+            cc: clang-17
+            cxx: clang++-17
+            generator: Ninja
+            build_type: Debug
+            extra_flags: >-
+              -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+              -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+          # ── Windows MSVC ──────────────────────────────────────────────────
+          - name: "Windows-MSVC-2022"
+            os: windows-2022
+            cc: ""
+            cxx: ""
+            generator: "Visual Studio 17 2022"
+            build_type: Release
+            extra_flags: "-A x64"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with: { name: sdk-stubs, path: stubs/ }
+
+      # ── Linux: install compilers and Ninja ──────────────────────────────
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            ninja-build \
+            ${{ matrix.cc }} \
+            libgl-dev libglu-dev
+
+      # ── Windows: MSVC is already available; set env ──────────────────────
+      - name: Setup MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with: { arch: x64 }
+
+      # ── Configure ────────────────────────────────────────────────────────
+      - name: Configure CMake (Linux)
+        if: runner.os == 'Linux'
+        env:
+          CC:  ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          cmake -B build -G "${{ matrix.generator }}" \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DNUKE_ROOT="${STUB_NUKE_ROOT}" \
+            -DUSD_ROOT="${STUB_USD_ROOT}" \
+            ${{ matrix.extra_flags }}
+
+      - name: Generate stubs (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $stub = Join-Path $env:GITHUB_WORKSPACE "stubs"
+          & "$env:GITHUB_WORKSPACE\scripts\generate_stubs.ps1" -StubsRoot $stub
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $stub = Join-Path $env:GITHUB_WORKSPACE "stubs"
+          cmake -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} `
+            "-DNUKE_ROOT=$stub\nuke" `
+            "-DUSD_ROOT=$stub\usd"
+
+      # ── Build ────────────────────────────────────────────────────────────
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build_type }} -j4
+
+      # ── Upload artefact ──────────────────────────────────────────────────
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: AttributePainter-${{ matrix.name }}
+          path: |
+            build/**/*.so
+            build/**/*.dll
+            build/**/*.dylib
+          if-no-files-found: warn
+          retention-days: 14
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  4. Release packaging — runs only on version tags (v*)
+# ─────────────────────────────────────────────────────────────────────────────
+  release:
+    name: Package Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artefacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Create archives
+        run: bash scripts/package_release.sh "${{ github.ref_name }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/release/*.tar.gz
+          generate_release_notes: true
