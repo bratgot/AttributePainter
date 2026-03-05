@@ -106,7 +106,7 @@ void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
     // â”€â”€ Viewport brush knob (invisible â€” only for 3D handle callbacks) â”€â”€â”€â”€â”€â”€
     // We use a custom knob so Nuke's handle system calls our draw/mouse methods.
     // Must be created LAST so it can reference the Op pointer.
-    //CustomKnob1(ViewportBrushKnob, f, this, "brush_handle");
+    CustomKnob1(ViewportBrushKnob, f, this, "brush_handle");
 }
 
 int AttributePainterOp::knob_changed(DD::Image::Knob* k) {
@@ -210,21 +210,14 @@ bool AttributePainterOp::rebuildGeometry() {
     std::vector<int> faceIndices(vtIndices.begin(), vtIndices.end());
 
     // â”€â”€ Rebuild sampler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    {
-        std::lock_guard<std::mutex> lock(dataMutex_);
-        sampler_->rebuild(worldPts, faceCounts, faceIndices);
-        brushKnob_->setMeshSampler(sampler_.get());
+    sampler_->rebuild(worldPts, faceCounts, faceIndices);
+    if (brushKnob_) brushKnob_->setMeshSampler(sampler_.get());
+    // Load existing colours from USD
+    writer_ = std::make_unique<USDColorWriter>(k_primvarName_);
+    auto existing = writer_->read(mesh, worldPts.size());
+    if (!existing.empty())
+        sampler_->initColors(existing);
 
-        // Load existing colours from USD (so we don't clobber them)
-        writer_ = std::make_unique<USDColorWriter>(k_primvarName_);
-        auto existing = writer_->read(mesh, worldPts.size());
-        if (!existing.empty())
-            sampler_->initColors(existing);
-    }
-
-    if (!worldPts.empty() && !faceCounts.empty() && sampler_) {
-        sampler_->rebuild(worldPts, faceCounts, faceIndices);
-    }
     geometryDirty_.store(false);
     return true;
 }
@@ -239,7 +232,6 @@ void AttributePainterOp::_validate(bool for_real) {
 
 void AttributePainterOp::geometry_engine(DD::Image::Scene& scene,
                                           DD::Image::GeometryList& out) {
-    return;
     DD::Image::GeoOp* geoInput = dynamic_cast<DD::Image::GeoOp*>(input(0));
     if (!geoInput) return;
     geoInput->get_geometry(scene, out);
@@ -273,11 +265,8 @@ void AttributePainterOp::geometry_engine(DD::Image::Scene& scene,
     }
     geometryDirty_.store(false);
 }
-static void brushDrawCallback(void* data, DD::Image::ViewerContext* ctx) {
-    if (data && ctx) static_cast<AP::ViewportBrushKnob*>(data)->draw_handle(ctx);
-}
-
 void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
+    GeoOp::build_handles(ctx);
     if (!brushKnob_) {
         DD::Image::Knob* k = knob("brush_handle");
         brushKnob_ = dynamic_cast<ViewportBrushKnob*>(k);
@@ -291,8 +280,7 @@ void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
         }
     }
     syncBrushStateToKnobs();
-    if (brushKnob_ && k_paintEnabled_)
-        ctx->add_draw_handle(brushDrawCallback, brushKnob_, nullptr, DD::Image::eDrawHandleNodeSelection);
+    if (brushKnob_) brushKnob_->draw_handle(ctx);
 }
 
 void AttributePainterOp::draw_handle(DD::Image::ViewerContext* ctx) {
@@ -314,10 +302,7 @@ void AttributePainterOp::onPaintTick(const Vec3f& pos,
 
     // Query vertices in radius
     std::vector<std::pair<uint32_t,float>> nearby;
-    {
-        std::lock_guard<std::mutex> lock(dataMutex_);
-        sampler_->verticesInRadius(pos, bs.radius, nearby);
-    }
+    sampler_->verticesInRadius(pos, bs.radius, nearby);
     if (nearby.empty()) return;
 
     // Snapshot before-state on first tick of this stroke
@@ -330,9 +315,7 @@ void AttributePainterOp::onPaintTick(const Vec3f& pos,
     }
 
     // Apply paint
-    {
-        std::lock_guard<std::mutex> lock(dataMutex_);
-        for (auto& [idx, dsq] : nearby) {
+    for (auto& [idx, dsq] : nearby) {
             float d = std::sqrt(dsq);
             float w = BrushSystem::weight(bs, d);
             if (w <= 0.f) continue;
@@ -342,7 +325,6 @@ void AttributePainterOp::onPaintTick(const Vec3f& pos,
             dst = BrushSystem::saturate(dst);
             sampler_->setColor(idx, dst);
             writer_->stage(idx, dst);
-        }
     }
 
     // Commit to USD every tick for live feedback
@@ -358,12 +340,9 @@ void AttributePainterOp::onStrokeEnd() {
 
     // Collect after-state
     std::vector<VertexColor> after;
-    {
-        std::lock_guard<std::mutex> lock(dataMutex_);
-        after.reserve(strokeBefore_.size());
-        for (auto& bv : strokeBefore_)
-            after.push_back({ bv.index, sampler_->getColor(bv.index) });
-    }
+    after.reserve(strokeBefore_.size());
+    for (auto& bv : strokeBefore_)
+        after.push_back({ bv.index, sampler_->getColor(bv.index) });
 
     undoStack_.beginStroke(strokeBefore_);
     undoStack_.endStroke(after);
@@ -384,12 +363,9 @@ void AttributePainterOp::commitToUSD() {
     if (!prim || !prim.IsA<UsdGeomMesh>()) return;
 
     UsdGeomMesh mesh(prim);
-    {
-        std::lock_guard<std::mutex> lock(dataMutex_);
-        auto& colors = const_cast<std::vector<Color3f>&>(sampler_->colors());
-        writer_->commit(mesh, colors);
-        writer_->clearStaged();
-    }
+    auto& colors = const_cast<std::vector<Color3f>&>(sampler_->colors());
+    writer_->commit(mesh, colors);
+    writer_->clearStaged();
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -398,12 +374,9 @@ void AttributePainterOp::commitToUSD() {
 
 void AttributePainterOp::applyVertexColors(const std::vector<VertexColor>& vcs) {
     if (!sampler_) return;
-    {
-        std::lock_guard<std::mutex> lock(dataMutex_);
-        for (auto& vc : vcs) {
-            sampler_->setColor(vc.index, vc.color);
-            writer_->stage(vc.index, vc.color);
-        }
+    for (auto& vc : vcs) {
+        sampler_->setColor(vc.index, vc.color);
+        writer_->stage(vc.index, vc.color);
     }
     commitToUSD();
     invalidate();
