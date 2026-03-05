@@ -13,6 +13,7 @@ namespace AP {
 
 void KdTree::build(const std::vector<Vec3f>& points) {
     nodes_.clear();
+    rootIdx_ = -1;
     if (points.empty()) return;
 
     std::vector<std::pair<Vec3f,uint32_t>> indexed;
@@ -21,15 +22,13 @@ void KdTree::build(const std::vector<Vec3f>& points) {
         indexed.push_back({points[i], i});
 
     nodes_.resize(points.size());
-    buildRecursive(indexed, 0, (int)indexed.size(), 0);
+    rootIdx_ = buildRecursive(indexed, 0, (int)indexed.size(), 0);
 }
 
 int KdTree::buildRecursive(std::vector<std::pair<Vec3f,uint32_t>>& pts,
                             int lo, int hi, int depth) {
     if (lo >= hi) return -1;
 
-    // Build using a thread-local temp buffer and recursive lambda.
-    // The outer call drives the whole build in one shot from [0, size).
     static thread_local std::vector<KdNode> tmp;
     tmp.resize(pts.size());
 
@@ -50,16 +49,17 @@ int KdTree::buildRecursive(std::vector<std::pair<Vec3f,uint32_t>>& pts,
         return m;
     };
 
-    build(0, (int)pts.size(), 0);
+    int root = build(0, (int)pts.size(), 0);
     nodes_ = tmp;
     nodes_.resize(pts.size());
-    return 0;
+    rootIdx_ = root;
+    return root;
 }
 
 void KdTree::queryRadius(const Vec3f& center, float radiusSq,
                          std::vector<std::pair<uint32_t,float>>& out) const {
-    if (nodes_.empty()) return;
-    queryRecursive(0, center, radiusSq, out);
+    if (nodes_.empty() || rootIdx_ < 0) return;
+    queryRecursive(rootIdx_, center, radiusSq, out);
 }
 
 void KdTree::queryRecursive(int ni, const Vec3f& center, float radiusSq,
@@ -75,7 +75,6 @@ void KdTree::queryRecursive(int ni, const Vec3f& center, float radiusSq,
     float axisDist = (&diff.x)[node.axis];
     float axisDistSq = axisDist * axisDist;
 
-    // Visit nearer child first
     int nearIdx = (axisDist < 0) ? node.left : node.right;
     int farIdx  = (axisDist < 0) ? node.right : node.left;
 
@@ -95,13 +94,26 @@ void MeshSampler::rebuild(const std::vector<Vec3f>& worldPoints,
     faceCounts_  = faceVertCounts;
     faceIndices_ = faceVertIndices;
 
-    colors_.assign(worldPoints.size(), Color3f{0.f, 0.f, 0.f});
+    // Preserve colours across topology-preserving rebuilds
+    if (colors_.size() != worldPoints.size()) {
+        colors_.assign(worldPoints.size(), Color3f{0.f, 0.f, 0.f});
+    }
+
+    // Compute bounding box and centroid
+    if (!points_.empty()) {
+        bboxMin_ = bboxMax_ = points_[0];
+        Vec3f sum = {0,0,0};
+        for (auto& p : points_) {
+            bboxMin_ = aabbMin(bboxMin_, p);
+            bboxMax_ = aabbMax(bboxMax_, p);
+            sum = sum + p;
+        }
+        float inv = 1.f / (float)points_.size();
+        centroid_ = sum * inv;
+    }
 
     tessellateFaces();
     buildBVH();
-
-    // FIX: KdTree must be built for verticesInRadius() to work.
-    // Without this, painting queries return zero vertices.
     kdTree_.build(points_);
 }
 
@@ -110,7 +122,6 @@ void MeshSampler::tessellateFaces() {
     int offset = 0;
     for (size_t fi = 0; fi < faceCounts_.size(); ++fi) {
         int count = faceCounts_[fi];
-        // Fan triangulation from v0
         for (int t = 1; t < count - 1; ++t) {
             Triangle tri;
             tri.faceIndex = (uint32_t)fi;
@@ -130,10 +141,6 @@ void MeshSampler::tessellateFaces() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  BVH construction
-//
-//  FIX: The original buildBVH() was a no-op (just cleared the vector),
-//  which meant intersect() always returned immediately with no hit.
-//  This broke the entire brush overlay — hitValid_ was never true.
 // ─────────────────────────────────────────────────────────────────────────────
 
 void MeshSampler::buildBVH() {
@@ -141,21 +148,14 @@ void MeshSampler::buildBVH() {
     triOrder_.clear();
     if (tris_.empty()) return;
 
-    // Build index list [0, 1, 2, ... N-1] and recursively partition.
-    // buildBVHRecursive reorders this array via nth_element, so BVH leaf
-    // nodes store ranges into this reordered array. We persist it as
-    // triOrder_ so that intersect() can map leaf ranges back to tris_.
     std::vector<uint32_t> indices(tris_.size());
     std::iota(indices.begin(), indices.end(), 0u);
     buildBVHRecursive(indices, 0, (int)indices.size(), 0);
-
-    // Persist the reordered index array for use during traversal
     triOrder_ = std::move(indices);
 }
 
 int MeshSampler::buildBVHRecursive(std::vector<uint32_t>& idx, int lo, int hi, int depth) {
     BVHNode node;
-    // Compute AABB
     node.bmin = { 1e30f, 1e30f, 1e30f };
     node.bmax = {-1e30f,-1e30f,-1e30f};
     for (int i = lo; i < hi; ++i) {
@@ -168,12 +168,6 @@ int MeshSampler::buildBVHRecursive(std::vector<uint32_t>& idx, int lo, int hi, i
 
     int count = hi - lo;
     if (count <= 4 || depth > 20) {
-        // Leaf — store the triangle index range.
-        // We need the tris_ array to be reordered so that the triangles
-        // referenced by idx[lo..hi) are contiguous. Since we're building
-        // in-place, we reorder tris_ to match the idx ordering now.
-        // The leaf stores absolute indices into tris_.
-        // After the full build, tris_ order matches the BVH leaf order.
         node.triBegin = (uint32_t)lo;
         node.triEnd   = (uint32_t)hi;
         int nodeIdx = (int)bvh_.size();
@@ -181,7 +175,6 @@ int MeshSampler::buildBVHRecursive(std::vector<uint32_t>& idx, int lo, int hi, i
         return nodeIdx;
     }
 
-    // Split along longest axis
     Vec3f extent = { node.bmax.x-node.bmin.x,
                      node.bmax.y-node.bmin.y,
                      node.bmax.z-node.bmin.z };
@@ -200,19 +193,19 @@ int MeshSampler::buildBVHRecursive(std::vector<uint32_t>& idx, int lo, int hi, i
         });
 
     int nodeIdx = (int)bvh_.size();
-    bvh_.push_back(node); // reserve slot
+    bvh_.push_back(node);
 
     int leftChild  = buildBVHRecursive(idx, lo,  mid, depth+1);
     int rightChild = buildBVHRecursive(idx, mid, hi,  depth+1);
     bvh_[nodeIdx].left  = leftChild;
     bvh_[nodeIdx].right = rightChild;
-    bvh_[nodeIdx].triBegin = bvh_[nodeIdx].triEnd = 0; // not a leaf
+    bvh_[nodeIdx].triBegin = bvh_[nodeIdx].triEnd = 0;
 
     return nodeIdx;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Ray-AABB slab test (returns tMin)
+//  Ray-AABB slab test
 // ─────────────────────────────────────────────────────────────────────────────
 
 bool MeshSampler::intersectAABB(const BVHNode& node, const Ray& ray, float& tMin) const {
@@ -267,25 +260,10 @@ bool MeshSampler::intersectTri(const Triangle& tri, const Ray& ray,
     return true;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Public: intersect
-//
-//  NOTE: The BVH leaf nodes store index ranges into the `idx` array that
-//  was used during construction. Since buildBVHRecursive reorders `idx`
-//  via nth_element, the leaf ranges [triBegin, triEnd) are indices into
-//  that reordered array — NOT into tris_ directly. We need to look up
-//  through the idx indirection.
-//
-//  However, the current design stores the idx array only on the stack
-//  during buildBVH(). To fix this properly we persist the reordered
-//  index array. See triOrder_ below.
-// ─────────────────────────────────────────────────────────────────────────────
-
 HitResult MeshSampler::intersect(const Ray& ray) const {
     HitResult result;
     if (bvh_.empty()) return result;
 
-    // Iterative BVH traversal using explicit stack
     std::stack<int> stack;
     stack.push(0);
 
@@ -301,7 +279,6 @@ HitResult MeshSampler::intersect(const Ray& ray) const {
         bool isLeaf = (node.left < 0 && node.right < 0);
         if (isLeaf) {
             for (uint32_t ti = node.triBegin; ti < node.triEnd; ++ti) {
-                // ti indexes into triOrder_, which maps to tris_
                 uint32_t triIdx = (ti < triOrder_.size()) ? triOrder_[ti] : ti;
                 float t; Vec3f n;
                 if (intersectTri(tris_[triIdx], ray, t, n)) {
@@ -319,12 +296,15 @@ HitResult MeshSampler::intersect(const Ray& ray) const {
             stack.push(node.right);
         }
     }
+    // Flip normal to face the camera if we hit a back face.
+    // This prevents the brush from flipping on closed meshes like spheres.
+    if (result.hit) {
+        if (dot(result.normal, ray.dir) > 0.f) {
+            result.normal = result.normal * -1.f;
+        }
+    }
     return result;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Public: verticesInRadius
-// ─────────────────────────────────────────────────────────────────────────────
 
 void MeshSampler::verticesInRadius(const Vec3f& center, float radius,
                                     std::vector<std::pair<uint32_t,float>>& out) const {
@@ -333,10 +313,6 @@ void MeshSampler::verticesInRadius(const Vec3f& center, float radius,
     std::sort(out.begin(), out.end(),
         [](const auto& a, const auto& b){ return a.second < b.second; });
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Colour accessors
-// ─────────────────────────────────────────────────────────────────────────────
 
 Color3f MeshSampler::getColor(uint32_t idx) const {
     if (idx < colors_.size()) return colors_[idx];

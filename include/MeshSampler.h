@@ -13,12 +13,10 @@ namespace AP {
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  KdNode — compact 3D KD-tree for vertex lookups within a radius.
-//  Build once per mesh, query every stroke tick.
-//  ~32 bytes per node; build O(n log n), query O(log n + k).
 // ─────────────────────────────────────────────────────────────────────────────
 struct KdNode {
     Vec3f    point;
-    uint32_t pointIndex; // original vertex index
+    uint32_t pointIndex;
     int32_t  left  = -1;
     int32_t  right = -1;
     uint8_t  axis  = 0;
@@ -27,16 +25,13 @@ struct KdNode {
 class KdTree {
 public:
     void build(const std::vector<Vec3f>& points);
-
-    // Fill `out` with (index, distSq) pairs where distSq <= radiusSq
     void queryRadius(const Vec3f& center, float radiusSq,
                      std::vector<std::pair<uint32_t,float>>& out) const;
-
     bool empty() const { return nodes_.empty(); }
 
 private:
     std::vector<KdNode> nodes_;
-
+    int rootIdx_ = -1;  // index of root node (median of full build)
     int buildRecursive(std::vector<std::pair<Vec3f,uint32_t>>& pts,
                        int lo, int hi, int depth);
     void queryRecursive(int nodeIdx, const Vec3f& center,
@@ -45,51 +40,54 @@ private:
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  MeshSampler — wraps a USD mesh, owns the KD-tree and BVH for ray casting.
-//  Rebuild when topology or xform changes (dirty flag driven from the Op).
+//  MeshSampler
 // ─────────────────────────────────────────────────────────────────────────────
 class MeshSampler {
 public:
     MeshSampler() = default;
     ~MeshSampler() = default;
 
-    // Non-copyable (owns large buffers)
     MeshSampler(const MeshSampler&) = delete;
     MeshSampler& operator=(const MeshSampler&) = delete;
 
-    // Rebuild from USD mesh data (call from Op::build_handles or equivalent)
     void rebuild(const std::vector<Vec3f>& worldPoints,
                  const std::vector<int>&   faceVertCounts,
                  const std::vector<int>&   faceVertIndices);
 
-    // Ray-cast against the mesh. Returns closest hit.
     HitResult intersect(const Ray& ray) const;
 
-    // Return all vertex indices within world-space radius of center.
-    // Results are (index, distanceSq) pairs, sorted by distance.
     void verticesInRadius(const Vec3f& center, float radius,
                           std::vector<std::pair<uint32_t,float>>& out) const;
 
     bool isValid() const { return !points_.empty(); }
     size_t pointCount() const { return points_.size(); }
 
-    // Read current colour for a vertex (falls back to defaultColor if not set)
     Color3f getColor(uint32_t idx) const;
     void    setColor(uint32_t idx, Color3f c);
     void    initColors(const std::vector<Color3f>& initial);
     const std::vector<Color3f>& colors() const { return colors_; }
 
+    // Point accessor for GL debug drawing
+    Vec3f getPoint(uint32_t idx) const {
+        if (idx < points_.size()) return points_[idx];
+        return {0,0,0};
+    }
+
+    // Debug accessors
+    Vec3f centroid() const { return centroid_; }
+    Vec3f bboxMin() const  { return bboxMin_; }
+    Vec3f bboxMax() const  { return bboxMax_; }
+    size_t triCount() const { return tris_.size(); }
+    size_t bvhNodeCount() const { return bvh_.size(); }
+
 private:
-    // ── geometry ──────────────────────────────────────────────────────────────
-    std::vector<Vec3f>  points_;       // world-space vertex positions
+    std::vector<Vec3f>  points_;
     std::vector<int>    faceCounts_;
     std::vector<int>    faceIndices_;
-    std::vector<Vec3f>  faceNormals_;  // per-face normals (precomputed)
+    std::vector<Vec3f>  faceNormals_;
 
-    // ── acceleration structures ───────────────────────────────────────────────
     KdTree              kdTree_;
 
-    // BVH: flat AABB tree over triangulated faces
     struct Triangle {
         Vec3f v0, v1, v2;
         Vec3f normal;
@@ -97,25 +95,22 @@ private:
     };
     struct BVHNode {
         Vec3f    bmin, bmax;
-        int32_t  left  = -1;  // >=0 → child index, -1 → leaf
+        int32_t  left  = -1;
         int32_t  right = -1;
         uint32_t triBegin = 0;
         uint32_t triEnd   = 0;
     };
     std::vector<Triangle> tris_;
     std::vector<BVHNode>  bvh_;
-
-    // Persisted index ordering from BVH build.
-    // BVH leaf nodes store [triBegin, triEnd) ranges into this array,
-    // and triOrder_[i] gives the actual index into tris_.
-    // This is necessary because buildBVHRecursive reorders the index
-    // array via nth_element during construction.
     std::vector<uint32_t> triOrder_;
 
-    // ── colour data ───────────────────────────────────────────────────────────
     std::vector<Color3f> colors_;
 
-    // ── helpers ───────────────────────────────────────────────────────────────
+    // Cached bounds (recomputed on rebuild)
+    Vec3f centroid_ = {0,0,0};
+    Vec3f bboxMin_  = {0,0,0};
+    Vec3f bboxMax_  = {0,0,0};
+
     void buildBVH();
     int  buildBVHRecursive(std::vector<uint32_t>& indices, int lo, int hi, int depth);
     bool intersectAABB(const BVHNode& node, const Ray& ray, float& tMin) const;

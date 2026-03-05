@@ -1,13 +1,12 @@
 #include "AttributePainterOp.h"
 #include "ViewportBrushKnob.h"
 
-// Nuke NDK
 #include <DDImage/GeoInfo.h>
 #include <DDImage/PolyMesh.h>
+#include <DDImage/Primitive.h>
 #include <DDImage/Attribute.h>
 #include <DDImage/Scene.h>
 
-// USD
 #include <pxr/usd/usd/stage.h>
 #include <pxr/usd/usd/prim.h>
 #include <pxr/usd/usdGeom/mesh.h>
@@ -16,16 +15,13 @@
 #include <pxr/base/vt/array.h>
 
 #include <cstring>
+#include <cstdio>
 #include <algorithm>
 #include <sstream>
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace AP {
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Static data
-// ─────────────────────────────────────────────────────────────────────────────
 
 const char* const AttributePainterOp::kFalloffNames[] = {
     "Smooth", "Linear", "Constant", "Gaussian", nullptr
@@ -39,10 +35,6 @@ const DD::Image::Op::Description AttributePainterOp::description(
     AttributePainterOp::Build
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Constructor / Destructor
-// ─────────────────────────────────────────────────────────────────────────────
-
 AttributePainterOp::AttributePainterOp(Node* node)
     : GeoOp(node)
     , sampler_ (std::make_unique<MeshSampler>())
@@ -51,42 +43,18 @@ AttributePainterOp::AttributePainterOp(Node* node)
 
 AttributePainterOp::~AttributePainterOp() = default;
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Help text
-// ─────────────────────────────────────────────────────────────────────────────
-
 const char* AttributePainterOp::node_help() const {
-    return
-        "AttributePainter\n\n"
-        "Interactive vertex colour painter for USD geometry in Nuke 17.\n"
-        "Replicates Houdini's Attribute Paint SOP.\n\n"
-        "Usage:\n"
-        "  • Connect a USD node to the input.\n"
-        "  • Set the USD Prim Path to the mesh you want to paint.\n"
-        "  • Press P or click in the 3D viewer to begin painting.\n"
-        "  • Ctrl+Scroll to resize the brush.\n"
-        "  • Ctrl+Z / Ctrl+Shift+Z for undo/redo.\n\n"
-        "Painted data is written as a 'vertex' interpolated primvar\n"
-        "(default: 'displayColor') on the USD prim.\n";
+    return "AttributePainter v0.9.1\n\nInteractive vertex colour painter.\n";
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Knobs
-// ─────────────────────────────────────────────────────────────────────────────
-
 void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
-    // Passthrough GeoOp input knobs
     GeoOp::knobs(f);
 
-    // ── USD target ──────────────────────────────────────────────────────────
-    DD::Image::Text_knob(f, "v0.1.0 - handle fixes");
+    DD::Image::Text_knob(f, "v0.9.1");
     DD::Image::Divider(f, "USD Target");
     DD::Image::String_knob(f, &k_primPath_, "prim_path", "Prim Path");
-    DD::Image::Tooltip(f, "SdfPath of the UsdGeomMesh to paint (e.g. /World/Body)");
     DD::Image::String_knob(f, &k_primvarName_, "primvar_name", "Primvar Name");
-    DD::Image::Tooltip(f, "Name of the color primvar to write. Default: displayColor");
 
-    // ── Brush ───────────────────────────────────────────────────────────────
     DD::Image::Divider(f, "Brush");
     DD::Image::Bool_knob(f, &k_paintEnabled_, "paint_enabled", "Enable Paint");
     DD::Image::Bool_knob(f, &k_showBrush_,   "show_brush",    "Show Brush");
@@ -100,30 +68,22 @@ void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
     DD::Image::Enumeration_knob(f, &k_blend_,   kBlendNames,   "blend",   "Blend Mode");
     DD::Image::Color_knob(f, k_color_, "paint_color", "Color");
 
-    // ── Misc ────────────────────────────────────────────────────────────────
     DD::Image::Divider(f, "");
     DD::Image::Bool_knob(f, &k_flipNormals_, "flip_normals", "Flip Normals");
+    DD::Image::Bool_knob(f, &k_debug_, "debug", "Debug");
+    DD::Image::SetFlags(f, DD::Image::Knob::STARTLINE);
 
-    // ── Viewport brush knob (invisible — only for 3D handle callbacks) ──────
-    // We use a custom knob so Nuke's handle system calls our draw/mouse methods.
-    // Must be created LAST so it can reference the Op pointer.
     CustomKnob1(ViewportBrushKnob, f, this, "brush_handle");
 }
 
 int AttributePainterOp::knob_changed(DD::Image::Knob* k) {
-    // Geometry-invalidating changes
     if (k->is("prim_path") || k->is("primvar_name")) {
         geometryDirty_.store(true);
         return 1;
     }
-    // Brush state syncs
     syncBrushStateToKnobs();
     return GeoOp::knob_changed(k);
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Brush state sync
-// ─────────────────────────────────────────────────────────────────────────────
 
 void AttributePainterOp::syncBrushStateToKnobs() {
     if (!brushKnob_) return;
@@ -139,25 +99,19 @@ void AttributePainterOp::syncBrushStateToKnobs() {
 
     brushKnob_->setBrushState(bs);
     brushKnob_->setEnabled(k_paintEnabled_ && k_showBrush_);
+    brushKnob_->setDebug(k_debug_);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  USD stage extraction
-// ─────────────────────────────────────────────────────────────────────────────
-
 bool AttributePainterOp::extractStageFromInput(DD::Image::GeometryList& geoList) {
-    // Walk all geo objects in the list looking for a USD stage attachment
     for (unsigned obj = 0; obj < geoList.size(); ++obj) {
         const DD::Image::GeoInfo& info = geoList[obj];
-
         const DD::Image::AttribContext* ctx =
             info.get_typed_group_attribcontext(DD::Image::Group_Object, "usdStage",
                                            DD::Image::POINTER_ATTRIB);
         if (ctx && ctx->attribute) {
             const DD::Image::Attribute* attr = &(*ctx->attribute);
             if (attr->size() > 0) {
-                auto* stagePtr = reinterpret_cast<UsdStageRefPtr*>(
-                    attr->pointer(0));
+                auto* stagePtr = reinterpret_cast<UsdStageRefPtr*>(attr->pointer(0));
                 if (stagePtr && *stagePtr) {
                     stage_ = *stagePtr;
                     return true;
@@ -168,25 +122,14 @@ bool AttributePainterOp::extractStageFromInput(DD::Image::GeometryList& geoList)
     return false;
 }
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Rebuild geometry (call when prim path or topology changes)
-// ─────────────────────────────────────────────────────────────────────────────
-
 bool AttributePainterOp::rebuildGeometry() {
     if (!stage_) return false;
-
     targetPath_ = SdfPath(k_primPath_);
     UsdPrim prim = stage_->GetPrimAtPath(targetPath_);
     if (!prim || !prim.IsA<UsdGeomMesh>()) return false;
-
     UsdGeomMesh mesh(prim);
-
-    // ── Points ──────────────────────────────────────────────────────────────
     VtArray<GfVec3f> vtPoints;
     mesh.GetPointsAttr().Get(&vtPoints);
-
-    // Apply local-to-world xform
     GfMatrix4d xform = UsdGeomXformCache().GetLocalToWorldTransform(prim);
     std::vector<Vec3f> worldPts;
     worldPts.reserve(vtPoints.size());
@@ -194,30 +137,89 @@ bool AttributePainterOp::rebuildGeometry() {
         GfVec3d pw = xform.Transform(GfVec3d(p[0], p[1], p[2]));
         worldPts.push_back({ (float)pw[0], (float)pw[1], (float)pw[2] });
     }
-
-    // ── Topology ────────────────────────────────────────────────────────────
     VtArray<int> vtCounts, vtIndices;
-    mesh.GetFaceVertexCountsAttr() .Get(&vtCounts);
+    mesh.GetFaceVertexCountsAttr().Get(&vtCounts);
     mesh.GetFaceVertexIndicesAttr().Get(&vtIndices);
-
-    std::vector<int> faceCounts (vtCounts.begin(),  vtCounts.end());
-    std::vector<int> faceIndices(vtIndices.begin(), vtIndices.end());
-
-    // ── Rebuild sampler ─────────────────────────────────────────────────────
-    sampler_->rebuild(worldPts, faceCounts, faceIndices);
+    std::vector<int> fc(vtCounts.begin(), vtCounts.end());
+    std::vector<int> fi(vtIndices.begin(), vtIndices.end());
+    sampler_->rebuild(worldPts, fc, fi);
     if (brushKnob_) brushKnob_->setMeshSampler(sampler_.get());
-    // Load existing colours from USD
     writer_ = std::make_unique<USDColorWriter>(k_primvarName_);
     auto existing = writer_->read(mesh, worldPts.size());
-    if (!existing.empty())
-        sampler_->initColors(existing);
-
+    if (!existing.empty()) sampler_->initColors(existing);
     geometryDirty_.store(false);
     return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  geometry_engine — called by Nuke to cook this node
+//  Helper: extract faces from a single DDImage Primitive.
+//
+//  DDImage has two kinds of primitives:
+//    1. Simple (Triangle, Polygon): vertices() gives face vertex count,
+//       vertex(i) gives the point index. One face per Primitive.
+//    2. PolyMesh: contains MULTIPLE faces. faces() gives face count,
+//       face_vertices(f) gives vertex count per face,
+//       vertex(face_vertex(f, v)) gives the point index.
+//
+//  The old code treated every Primitive as type 1, which made a single
+//  giant polygon out of a PolyMesh — wrong topology, BVH couldn't
+//  intersect it, and painting failed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void extractFacesFromPrimitive(const DD::Image::Primitive* prim,
+                                       unsigned int npts,
+                                       unsigned int baseIdx,
+                                       std::vector<int>& faceCounts,
+                                       std::vector<int>& faceIndices,
+                                       int& extractedFaces) {
+    if (!prim) return;
+
+    // Try PolyMesh path first (multi-face primitive)
+    unsigned int numFaces = 0;
+    try { numFaces = prim->faces(); } catch (...) { return; }
+
+    if (numFaces > 1) {
+        // PolyMesh: iterate individual faces using flat vertex array.
+        // Vertices are stored consecutively — face f starts at offset
+        // sum(face_vertices(0..f-1)) into the vertex array.
+        unsigned int vertexOffset = 0;
+        for (unsigned int f = 0; f < numFaces; ++f) {
+            unsigned int fvCount = 0;
+            try { fvCount = prim->face_vertices(f); } catch (...) { continue; }
+            if (fvCount < 3 || fvCount > 100) {
+                vertexOffset += fvCount;
+                continue;
+            }
+
+            faceCounts.push_back((int)fvCount);
+            for (unsigned int v = 0; v < fvCount; ++v) {
+                unsigned int pointIdx = 0;
+                try { pointIdx = prim->vertex(vertexOffset + v); } catch (...) { pointIdx = 0; }
+                if (pointIdx >= npts) pointIdx = 0;
+                faceIndices.push_back((int)(baseIdx + pointIdx));
+            }
+            vertexOffset += fvCount;
+            ++extractedFaces;
+        }
+    } else {
+        // Simple primitive: one face, vertices() is the vertex count
+        unsigned int vcount = 0;
+        try { vcount = prim->vertices(); } catch (...) { return; }
+        if (vcount < 3 || vcount > 10000) return;
+
+        faceCounts.push_back((int)vcount);
+        for (unsigned int v = 0; v < vcount; ++v) {
+            unsigned int vi = 0;
+            try { vi = prim->vertex(v); } catch (...) { vi = 0; }
+            if (vi >= npts) vi = 0;
+            faceIndices.push_back((int)(baseIdx + vi));
+        }
+        ++extractedFaces;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  geometry_engine
 // ─────────────────────────────────────────────────────────────────────────────
 
 void AttributePainterOp::_validate(bool for_real) {
@@ -227,59 +229,80 @@ void AttributePainterOp::_validate(bool for_real) {
 void AttributePainterOp::geometry_engine(DD::Image::Scene& scene,
                                           DD::Image::GeometryList& out) {
     DD::Image::GeoOp* geoInput = dynamic_cast<DD::Image::GeoOp*>(input(0));
-    if (!geoInput) return;
+    if (!geoInput) {
+        if (sampler_ && sampler_->isValid()) {
+            sampler_ = std::make_unique<MeshSampler>();
+            if (brushKnob_) brushKnob_->setMeshSampler(sampler_.get());
+        }
+        return;
+    }
     geoInput->get_geometry(scene, out);
-    if (!geometryDirty_.load()) return;
+    extractStageFromInput(out);
+
     std::vector<Vec3f> worldPts;
     std::vector<int> faceCounts, faceIndices;
+
     for (unsigned int g = 0; g < out.size(); ++g) {
         const DD::Image::GeoInfo& geo = out[g];
         const DD::Image::PointList* pts = geo.point_list();
         if (!pts || pts->size() == 0) continue;
+
         unsigned int npts = (unsigned int)pts->size();
         unsigned int baseIdx = (unsigned int)worldPts.size();
+        const DD::Image::Matrix4& xform = geo.matrix;
+
         for (unsigned int i = 0; i < npts; ++i) {
-            const DD::Image::Vector3& p = (*pts)[i];
-            worldPts.push_back({p.x, p.y, p.z});
+            DD::Image::Vector3 local = (*pts)[i];
+            DD::Image::Vector4 w4 = xform * DD::Image::Vector4(local.x, local.y, local.z, 1.0f);
+            if (std::abs(w4.w) > 1e-8f)
+                worldPts.push_back({(float)(w4.x/w4.w), (float)(w4.y/w4.w), (float)(w4.z/w4.w)});
+            else
+                worldPts.push_back({(float)w4.x, (float)w4.y, (float)w4.z});
         }
-        for (unsigned int f = 0; f < geo.primitives(); ++f) {
-            const DD::Image::Primitive* prim = geo.primitive(f);
-            if (!prim) continue;
-            unsigned int vcount = prim->vertices();
-            faceCounts.push_back((int)vcount);
-            for (unsigned int v = 0; v < vcount; ++v) {
-                unsigned int vi = prim->vertex(v);
-                if (vi >= npts) vi = 0;
-                faceIndices.push_back((int)(baseIdx + vi));
+
+        unsigned int numPrims = 0;
+        try { numPrims = geo.primitives(); } catch (...) { numPrims = 0; }
+
+        int extractedFaces = 0;
+        for (unsigned int f = 0; f < numPrims; ++f) {
+            const DD::Image::Primitive* prim = nullptr;
+            try { prim = geo.primitive(f); } catch (...) { continue; }
+            extractFacesFromPrimitive(prim, npts, baseIdx,
+                                       faceCounts, faceIndices, extractedFaces);
+        }
+
+        fprintf(stderr, "[AP] geo[%u]: %u pts, %u prims -> %d faces extracted\n",
+                g, npts, numPrims, extractedFaces);
+
+        // Fallback: triangle soup if no faces found
+        if (extractedFaces == 0 && npts >= 3 && (npts % 3 == 0)) {
+            fprintf(stderr, "[AP] geo[%u]: fallback triangle soup (%u tris)\n", g, npts/3);
+            for (unsigned int i = 0; i < npts; i += 3) {
+                faceCounts.push_back(3);
+                faceIndices.push_back((int)(baseIdx + i));
+                faceIndices.push_back((int)(baseIdx + i + 1));
+                faceIndices.push_back((int)(baseIdx + i + 2));
             }
         }
     }
+
     if (!worldPts.empty() && !faceCounts.empty() && sampler_) {
         sampler_->rebuild(worldPts, faceCounts, faceIndices);
+        totalPointCount_ = (unsigned)worldPts.size();
+    } else if (sampler_ && sampler_->isValid() && worldPts.empty()) {
+        sampler_ = std::make_unique<MeshSampler>();
+        if (brushKnob_) brushKnob_->setMeshSampler(sampler_.get());
     }
+
     geometryDirty_.store(false);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  build_handles / draw_handle
-//
-//  IMPORTANT: build_handles is the REGISTRATION phase only.
-//  No GL calls are allowed here — Nuke hasn't set up the GL context yet.
-//  All drawing must happen in draw_handle, which Nuke calls during the
-//  actual draw pass after registration is complete.
-//
-//  The flow is:
-//    1. Nuke calls build_handles() → we call add_draw_handle() to register
-//    2. Nuke calls draw_handle()   → we do GL drawing + event dispatch
-//    3. The custom knob's build_handle/draw_handle are called separately
-//       by Nuke's knob handle system — we do NOT call them manually.
 // ─────────────────────────────────────────────────────────────────────────────
 
 void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
-    // Let GeoOp register its built-in handles (transform, etc.)
     GeoOp::build_handles(ctx);
-
-    // Lazily grab the knob pointer and wire up callbacks
     if (!brushKnob_) {
         DD::Image::Knob* k = knob("brush_handle");
         brushKnob_ = dynamic_cast<ViewportBrushKnob*>(k);
@@ -293,20 +316,16 @@ void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
         }
     }
     syncBrushStateToKnobs();
-
-    // Register ourselves for the draw pass — Nuke will call draw_handle() next
     add_draw_handle(ctx);
 }
 
 void AttributePainterOp::draw_handle(DD::Image::ViewerContext* ctx) {
-    // Delegate all drawing and event handling to the brush knob.
-    // The knob handles its own begin_handle/end_handle for picking,
-    // draws the brush circle overlay, and dispatches mouse events.
-    if (brushKnob_) brushKnob_->draw_handle(ctx);
+    if (brushKnob_)
+        brushKnob_->draw_handle(ctx);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  onPaintTick — called each time the mouse moves while painting
+//  Paint
 // ─────────────────────────────────────────────────────────────────────────────
 
 void AttributePainterOp::onPaintTick(const Vec3f& pos,
@@ -318,86 +337,78 @@ void AttributePainterOp::onPaintTick(const Vec3f& pos,
     bs.center = pos;
     bs.normal = normal;
 
-    // Query vertices in radius
     std::vector<std::pair<uint32_t,float>> nearby;
     sampler_->verticesInRadius(pos, bs.radius, nearby);
+
+    if (firstTick) {
+        fprintf(stderr, "[AP paint] pos=(%.3f,%.3f,%.3f) radius=%.4f nearby=%zu\n",
+                pos.x, pos.y, pos.z, bs.radius, nearby.size());
+    }
+
     if (nearby.empty()) return;
 
-    // Snapshot before-state on first tick of this stroke
     if (firstTick) {
         strokeBefore_.clear();
         strokeCurrent_.clear();
-        for (auto& [idx, dsq] : nearby) {
-            strokeBefore_.push_back({ idx, sampler_->getColor(idx) });
-        }
+        strokeTouched_.clear();
     }
 
-    // Apply paint
+    int painted = 0;
     for (auto& [idx, dsq] : nearby) {
-            float d = std::sqrt(dsq);
-            float w = BrushSystem::weight(bs, d);
-            if (w <= 0.f) continue;
+        if (strokeTouched_.find(idx) == strokeTouched_.end()) {
+            strokeBefore_.push_back({ idx, sampler_->getColor(idx) });
+            strokeTouched_.insert(idx);
+        }
 
-            Color3f src = sampler_->getColor(idx);
-            Color3f dst = BrushSystem::blend(bs, src, w);
-            dst = BrushSystem::saturate(dst);
-            sampler_->setColor(idx, dst);
-            writer_->stage(idx, dst);
+        float d = std::sqrt(dsq);
+        float w = BrushSystem::weight(bs, d);
+        if (w <= 0.f) continue;
+
+        Color3f src = sampler_->getColor(idx);
+        Color3f dst = BrushSystem::blend(bs, src, w);
+        dst = BrushSystem::saturate(dst);
+        sampler_->setColor(idx, dst);
+        ++painted;
+
+        if (writer_) writer_->stage(idx, dst);
     }
 
-    // Commit to USD every tick for live feedback
+    if (firstTick && painted > 0) {
+        fprintf(stderr, "[AP paint] painted %d verts\n", painted);
+    }
+
     commitToUSD();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  onStrokeEnd — finalize undo record and flush USD
-// ─────────────────────────────────────────────────────────────────────────────
-
 void AttributePainterOp::onStrokeEnd() {
     if (!sampler_) return;
-
-    // Collect after-state
     std::vector<VertexColor> after;
     after.reserve(strokeBefore_.size());
     for (auto& bv : strokeBefore_)
         after.push_back({ bv.index, sampler_->getColor(bv.index) });
-
     undoStack_.beginStroke(strokeBefore_);
     undoStack_.endStroke(after);
     strokeBefore_.clear();
-
-    // Tell Nuke the node is dirty so the viewer refreshes
-    invalidate();
+    strokeTouched_.clear();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  commitToUSD — flush staged colour edits to the live USD stage
-// ─────────────────────────────────────────────────────────────────────────────
-
 void AttributePainterOp::commitToUSD() {
-    if (!stage_) return;
-
+    if (!stage_ || !writer_) return;
     UsdPrim prim = stage_->GetPrimAtPath(targetPath_);
     if (!prim || !prim.IsA<UsdGeomMesh>()) return;
-
     UsdGeomMesh mesh(prim);
     auto& colors = const_cast<std::vector<Color3f>&>(sampler_->colors());
     writer_->commit(mesh, colors);
     writer_->clearStaged();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  applyVertexColors — used by undo/redo
-// ─────────────────────────────────────────────────────────────────────────────
-
 void AttributePainterOp::applyVertexColors(const std::vector<VertexColor>& vcs) {
     if (!sampler_) return;
     for (auto& vc : vcs) {
         sampler_->setColor(vc.index, vc.color);
-        writer_->stage(vc.index, vc.color);
+        if (writer_) writer_->stage(vc.index, vc.color);
     }
     commitToUSD();
-    invalidate();
 }
 
 } // namespace AP

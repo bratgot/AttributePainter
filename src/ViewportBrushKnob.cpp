@@ -1,220 +1,428 @@
 #include "ViewportBrushKnob.h"
 #include "AttributePainterOp.h"
-#include <fdk/math/Mat4.h>   // fdk::Mat4d for camera worldTransform()
-#include <DDImage/AxisOp.h>
 #include <DDImage/ViewerContext.h>
-#include <DDImage/Matrix4.h>
 #include <DDImage/Vector3.h>
 #include <DDImage/gl.h>
 
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <algorithm>
 
-// ── Portable PI ───────────────────────────────────────────────────────────────
 #ifndef AP_PIf
 static constexpr float AP_PIf = 3.14159265358979323846f;
 #endif
 
 namespace AP {
 
-// Number of segments for the brush circle overlay
 static constexpr int BRUSH_CIRCLE_SEGS = 64;
 
-ViewportBrushKnob::ViewportBrushKnob(DD::Image::Knob_Closure* kc, AttributePainterOp* op, const char* name)
-    : DD::Image::Knob(kc, name), op_(op) {}
-
 // ─────────────────────────────────────────────────────────────────────────────
-//  Ray building from screen coordinates using Nuke's ViewerContext
+//  Raw 4x4 column-major double matrix helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-Ray ViewportBrushKnob::buildRay(DD::Image::ViewerContext* ctx,
-                                 float sx, float sy) const {
-    // Viewport dimensions
-    int vpW = ctx->viewport().w();
-    int vpH = ctx->viewport().h();
-
-    // Normalised Device Coordinates [-1,1]
-    float ndcX = (2.f * sx / float(vpW)) - 1.f;
-    float ndcY = 1.f - (2.f * sy / float(vpH)); // flip Y
-
-    // Fetch projection + modelview from ctx
-    DD::Image::Matrix4 proj     = ctx->proj_matrix();
-    DD::Image::Matrix4 modelview = DD::Image::Matrix4::identity();
-    if (ctx->camera()) {
-        const fdk::Mat4d& wt = ctx->camera()->worldTransform();
+static void mat4Mul(const double A[16], const double B[16], double out[16]) {
+    for (int c = 0; c < 4; ++c)
         for (int r = 0; r < 4; ++r)
-            for (int c = 0; c < 4; ++c)
-                modelview[r][c] = (float)wt[r][c];
-    }
-    DD::Image::Matrix4 invPV    = (proj * modelview).inverse();
+            out[c*4+r] = A[0*4+r]*B[c*4+0] + A[1*4+r]*B[c*4+1]
+                       + A[2*4+r]*B[c*4+2] + A[3*4+r]*B[c*4+3];
+}
 
-    // Near point (z=-1 in NDC)
-    DD::Image::Vector4 nearPt = invPV * DD::Image::Vector4(ndcX, ndcY, -1.f, 1.f);
-    // Far point  (z=+1 in NDC)
-    DD::Image::Vector4 farPt  = invPV * DD::Image::Vector4(ndcX, ndcY,  1.f, 1.f);
+static bool mat4Inv(const double m[16], double inv[16]) {
+    double t[16];
+    t[0]  =  m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15]
+           + m[9]*m[7]*m[14]  + m[13]*m[6]*m[11]  - m[13]*m[7]*m[10];
+    t[4]  = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14]  + m[8]*m[6]*m[15]
+           - m[8]*m[7]*m[14]  - m[12]*m[6]*m[11]  + m[12]*m[7]*m[10];
+    t[8]  =  m[4]*m[9]*m[15]  - m[4]*m[11]*m[13]  - m[8]*m[5]*m[15]
+           + m[8]*m[7]*m[13]  + m[12]*m[5]*m[11]  - m[12]*m[7]*m[9];
+    t[12] = -m[4]*m[9]*m[14]  + m[4]*m[10]*m[13]  + m[8]*m[5]*m[14]
+           - m[8]*m[6]*m[13]  - m[12]*m[5]*m[10]  + m[12]*m[6]*m[9];
+    t[1]  = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14]  + m[9]*m[2]*m[15]
+           - m[9]*m[3]*m[14]  - m[13]*m[2]*m[11]  + m[13]*m[3]*m[10];
+    t[5]  =  m[0]*m[10]*m[15] - m[0]*m[11]*m[14]  - m[8]*m[2]*m[15]
+           + m[8]*m[3]*m[14]  + m[12]*m[2]*m[11]  - m[12]*m[3]*m[10];
+    t[9]  = -m[0]*m[9]*m[15]  + m[0]*m[11]*m[13]  + m[8]*m[1]*m[15]
+           - m[8]*m[3]*m[13]  - m[12]*m[1]*m[11]  + m[12]*m[3]*m[9];
+    t[13] =  m[0]*m[9]*m[14]  - m[0]*m[10]*m[13]  - m[8]*m[1]*m[14]
+           + m[8]*m[2]*m[13]  + m[12]*m[1]*m[10]  - m[12]*m[2]*m[9];
+    t[2]  =  m[1]*m[6]*m[15]  - m[1]*m[7]*m[14]   - m[5]*m[2]*m[15]
+           + m[5]*m[3]*m[14]  + m[13]*m[2]*m[7]   - m[13]*m[3]*m[6];
+    t[6]  = -m[0]*m[6]*m[15]  + m[0]*m[7]*m[14]   + m[4]*m[2]*m[15]
+           - m[4]*m[3]*m[14]  - m[12]*m[2]*m[7]   + m[12]*m[3]*m[6];
+    t[10] =  m[0]*m[5]*m[15]  - m[0]*m[7]*m[13]   - m[4]*m[1]*m[15]
+           + m[4]*m[3]*m[13]  + m[12]*m[1]*m[7]   - m[12]*m[3]*m[5];
+    t[14] = -m[0]*m[5]*m[14]  + m[0]*m[6]*m[13]   + m[4]*m[1]*m[14]
+           - m[4]*m[2]*m[13]  - m[12]*m[1]*m[6]   + m[12]*m[2]*m[5];
+    t[3]  = -m[1]*m[6]*m[11]  + m[1]*m[7]*m[10]   + m[5]*m[2]*m[11]
+           - m[5]*m[3]*m[10]  - m[9]*m[2]*m[7]    + m[9]*m[3]*m[6];
+    t[7]  =  m[0]*m[6]*m[11]  - m[0]*m[7]*m[10]   - m[4]*m[2]*m[11]
+           + m[4]*m[3]*m[10]  + m[8]*m[2]*m[7]    - m[8]*m[3]*m[6];
+    t[11] = -m[0]*m[5]*m[11]  + m[0]*m[7]*m[9]    + m[4]*m[1]*m[11]
+           - m[4]*m[3]*m[9]   - m[8]*m[1]*m[7]    + m[8]*m[3]*m[5];
+    t[15] =  m[0]*m[5]*m[10]  - m[0]*m[6]*m[9]    - m[4]*m[1]*m[10]
+           + m[4]*m[2]*m[9]   + m[8]*m[1]*m[6]    - m[8]*m[2]*m[5];
 
-    DD::Image::Vector3 near3(nearPt.x/nearPt.w, nearPt.y/nearPt.w, nearPt.z/nearPt.w);
-    DD::Image::Vector3 far3 ( farPt.x/ farPt.w,  farPt.y/ farPt.w,  farPt.z/ farPt.w);
-    DD::Image::Vector3 dir  = far3 - near3;
-    float len = dir.length();
-    if (len > 1e-8f) dir /= len;
+    double det = m[0]*t[0] + m[1]*t[4] + m[2]*t[8] + m[3]*t[12];
+    if (std::abs(det) < 1e-20) return false;
+    double invDet = 1.0 / det;
+    for (int i = 0; i < 16; ++i) inv[i] = t[i] * invDet;
+    return true;
+}
 
-    return Ray{ {near3.x, near3.y, near3.z}, {dir.x, dir.y, dir.z} };
+static void mat4MulVec4(const double M[16], const double v[4], double out[4]) {
+    for (int r = 0; r < 4; ++r)
+        out[r] = M[0*4+r]*v[0] + M[1*4+r]*v[1] + M[2*4+r]*v[2] + M[3*4+r]*v[3];
+}
+
+static bool glProject(const double obj[3],
+                       const double mv[16], const double proj[16],
+                       const int vp[4], double& winX, double& winY) {
+    double mvp[16]; mat4Mul(proj, mv, mvp);
+    double v4[4] = {obj[0],obj[1],obj[2],1.0}, clip[4];
+    mat4MulVec4(mvp, v4, clip);
+    if (std::abs(clip[3]) < 1e-12) return false;
+    winX = vp[0] + vp[2] * (clip[0]/clip[3] + 1.0) * 0.5;
+    winY = vp[1] + vp[3] * (clip[1]/clip[3] + 1.0) * 0.5;
+    return true;
+}
+
+static bool glUnproject(double winX, double winY, double winZ,
+                         const double mv[16], const double proj[16],
+                         const int vp[4],
+                         double& objX, double& objY, double& objZ) {
+    double mvp[16], inv[16];
+    mat4Mul(proj, mv, mvp);
+    if (!mat4Inv(mvp, inv)) return false;
+    double ndc[4] = {
+        2.0*(winX-vp[0])/vp[2]-1.0,
+        2.0*(winY-vp[1])/vp[3]-1.0,
+        2.0*winZ-1.0, 1.0 };
+    double world[4]; mat4MulVec4(inv, ndc, world);
+    if (std::abs(world[3]) < 1e-12) return false;
+    objX = world[0]/world[3]; objY = world[1]/world[3]; objZ = world[2]/world[3];
+    return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Update hover hit point
+
+ViewportBrushKnob::ViewportBrushKnob(DD::Image::Knob_Closure* kc,
+                                       AttributePainterOp* op,
+                                       const char* name)
+    : DD::Image::Knob(kc, name), op_(op)
+{
+    memset(cachedMV_, 0, sizeof(cachedMV_));
+    memset(cachedProj_, 0, sizeof(cachedProj_));
+}
+
+void ViewportBrushKnob::cacheGLMatrices() {
+    glGetDoublev(GL_MODELVIEW_MATRIX,  cachedMV_);
+    glGetDoublev(GL_PROJECTION_MATRIX, cachedProj_);
+    glGetIntegerv(GL_VIEWPORT,         cachedVP_);
+    matricesCached_ = true;
+}
+
+bool ViewportBrushKnob::projectToScreen(const Vec3f& world,
+                                          float& screenX, float& screenY) const {
+    if (!matricesCached_) return false;
+    double obj[3] = {world.x, world.y, world.z};
+    double wx, wy;
+    if (!glProject(obj, cachedMV_, cachedProj_, cachedVP_, wx, wy)) return false;
+    screenX = (float)wx; screenY = (float)wy;
+    return true;
+}
+
+void ViewportBrushKnob::updateMouseFromWin32() {
+#if defined(_WIN32) || defined(_WIN64)
+    HDC hdc = wglGetCurrentDC();
+    HWND hwnd = WindowFromDC(hdc);
+    if (!hwnd) return;
+    POINT pt; GetCursorPos(&pt); ScreenToClient(hwnd, &pt);
+    RECT rc; GetClientRect(hwnd, &rc);
+    int clientH = rc.bottom - rc.top;
+    mouseGLX_ = (float)pt.x;
+    mouseGLY_ = (float)(clientH - 1 - pt.y);
+#endif
+}
+
+Ray ViewportBrushKnob::buildRay(float glX, float glY) const {
+    if (!matricesCached_) return Ray{{0,0,0},{0,0,-1}};
+    double nx,ny,nz, fx,fy,fz;
+    if (!glUnproject(glX, glY, 0.0, cachedMV_, cachedProj_, cachedVP_, nx,ny,nz))
+        return Ray{{0,0,0},{0,0,-1}};
+    if (!glUnproject(glX, glY, 1.0, cachedMV_, cachedProj_, cachedVP_, fx,fy,fz))
+        return Ray{{0,0,0},{0,0,-1}};
+    float dx=(float)(fx-nx), dy=(float)(fy-ny), dz=(float)(fz-nz);
+    float len = std::sqrt(dx*dx+dy*dy+dz*dz);
+    if (len > 1e-8f) { dx/=len; dy/=len; dz/=len; }
+    return Ray{{(float)nx,(float)ny,(float)nz},{dx,dy,dz}};
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Raycast + smooth normal
 // ─────────────────────────────────────────────────────────────────────────────
 
-void ViewportBrushKnob::updateHit(DD::Image::ViewerContext* ctx) {
+void ViewportBrushKnob::updateHit() {
     hitValid_ = false;
-    if (!sampler_ || !sampler_->isValid()) return;
+    if (!sampler_ || !sampler_->isValid() || !matricesCached_) return;
 
-    Ray ray = buildRay(ctx, mouseX_, mouseY_);
-    lastHit_ = sampler_->intersect(ray);
+    debugRay_ = buildRay(mouseGLX_, mouseGLY_);
+    lastHit_ = sampler_->intersect(debugRay_);
     hitValid_ = lastHit_.hit;
 
-    // Keep brush center updated so the op can draw it
-    if (hitValid_) brushState_.center = lastHit_.position;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Mouse events
-// ─────────────────────────────────────────────────────────────────────────────
-
-void ViewportBrushKnob::handleMouseMove(DD::Image::ViewerContext* ctx) {
-    if (!enabled_) return;
-    mouseX_ = (float)ctx->mouse_x();
-    mouseY_ = (float)ctx->mouse_y();
-    updateHit(ctx);
-}
-
-void ViewportBrushKnob::handleMouseDown(DD::Image::ViewerContext* ctx) {
-    if (!enabled_) return;
-    if (ctx->button() != DD::Image::LeftButton) return;
-
-    mouseX_ = (float)ctx->mouse_x();
-    mouseY_ = (float)ctx->mouse_y();
-    updateHit(ctx);
-
     if (hitValid_) {
-        painting_  = true;
-        firstTick_ = true;
-        if (onPaint_) onPaint_(lastHit_.position, lastHit_.normal, true);
-        firstTick_ = false;
-    }
-}
+        brushState_.center = lastHit_.position;
 
-void ViewportBrushKnob::handleMouseDrag(DD::Image::ViewerContext* ctx) {
-    if (!enabled_ || !painting_) return;
-
-    mouseX_ = (float)ctx->mouse_x();
-    mouseY_ = (float)ctx->mouse_y();
-    updateHit(ctx);
-
-    if (hitValid_ && onPaint_)
-        onPaint_(lastHit_.position, lastHit_.normal, false);
-}
-
-void ViewportBrushKnob::handleMouseUp(DD::Image::ViewerContext* ctx) {
-    if (!painting_) return;
-    painting_ = false;
-    if (onStrokeEnd_) onStrokeEnd_();
-}
-
-void ViewportBrushKnob::handleMouseScroll(DD::Image::ViewerContext* ctx) {
-    if (!enabled_) return;
-    // Ctrl+scroll → resize brush
-    if (ctx->state() & DD::Image::CTRL) {
-        float delta = (ctx->wheel_dy() > 0) ? 1.1f : (1.f/1.1f);
-        brushState_.radius = std::clamp(brushState_.radius * delta, 0.001f, 100.0f);
+        // Smooth the normal to prevent jumping at triangle edges.
+        // Lerp toward the new face normal each frame.
+        Vec3f rawN = lastHit_.normal;
+        if (!hasSmoothedNormal_) {
+            smoothedNormal_ = rawN;
+            hasSmoothedNormal_ = true;
+        } else {
+            const float smoothing = 0.3f; // 0=frozen, 1=instant snap
+            smoothedNormal_.x += (rawN.x - smoothedNormal_.x) * smoothing;
+            smoothedNormal_.y += (rawN.y - smoothedNormal_.y) * smoothing;
+            smoothedNormal_.z += (rawN.z - smoothedNormal_.z) * smoothing;
+            // Re-normalize
+            float len = std::sqrt(smoothedNormal_.lengthSq());
+            if (len > 1e-8f) {
+                smoothedNormal_ = smoothedNormal_ * (1.f / len);
+            }
+        }
+        brushState_.normal = smoothedNormal_;
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  GL Overlay — build_handle + draw_handle
-//
-//  IMPORTANT: For Nuke to route mouse events (PUSH, DRAG, RELEASE) to a
-//  custom knob, the knob must register a pickable handle region during the
-//  draw pass using begin_handle / end_handle (or make_handle).
-//
-//  Without this registration, all mouse events go to Nuke's default viewer
-//  navigation (tumble/pan/zoom) and the brush never receives input.
-//
-//  The flow:
-//    1. build_handle() returns true → Nuke knows to call draw_handle()
-//    2. During DRAW_LINES/DRAW_OPAQUE passes, we call begin_handle() to
-//       register our pick region, draw our overlay, then end_handle()
-//    3. When the user clicks/drags over our registered region, Nuke routes
-//       PUSH/DRAG/RELEASE events to our draw_handle()
+//  draw_handle
 // ─────────────────────────────────────────────────────────────────────────────
-
-bool ViewportBrushKnob::build_handle(DD::Image::ViewerContext* ctx) {
-    // Return true so Nuke registers draw_handle as a callback.
-    // This is the registration phase — no GL calls here.
-    return enabled_;
-}
 
 void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
     using namespace DD::Image;
     const ViewerEvent ev = ctx->event();
 
-    // ── Drawing passes ──────────────────────────────────────────────────────
-    // During draw passes, register a pickable handle region so that Nuke
-    // routes subsequent mouse events to us instead of the viewer navigation.
-    if (ev == DRAW_OPAQUE || ev == DRAW_LINES || ev == DRAW_OVERLAY) {
-        // Register pick region on ALL draw passes so Nuke routes mouse
-        // events to us, but only render the overlay during DRAW_OVERLAY.
-        // DRAW_OVERLAY runs after all opaque geometry is rendered, so
-        // with depth testing disabled the brush always draws on top.
-        begin_handle(Knob::ANYWHERE, ctx, nullptr, 0, 0, 0);
+    static bool printed = false;
+    if (!printed) {
+        fprintf(stderr, "=== AttributePainter v0.9.1 ===\n");
+        printed = true;
+    }
 
-        if (ev == DRAW_OVERLAY && hitValid_)
-            drawBrushCircle(ctx);
+    if (ev == DRAW_OPAQUE) {
+        cacheGLMatrices();
+        updateMouseFromWin32();
+        nukeMouseX_ = (float)ctx->mouse_x();
+        nukeMouseY_ = (float)ctx->mouse_y();
+        updateHit();
 
-        end_handle(ctx);
+        ++debugFrame_;
+
+        // ── Poll LMB ──────────────────────────────────────────────────────
+        bool lmbDown = false;
+#if defined(_WIN32) || defined(_WIN64)
+        lmbDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+#endif
+
+        if (enabled_ && hitValid_) {
+            if (lmbDown && !painting_) {
+                painting_  = true;
+                firstTick_ = true;
+                fprintf(stderr, "[AP] STROKE BEGIN at (%.3f,%.3f,%.3f)\n",
+                        lastHit_.position.x, lastHit_.position.y, lastHit_.position.z);
+                if (onPaint_)
+                    onPaint_(lastHit_.position, lastHit_.normal, true);
+                else
+                    fprintf(stderr, "[AP] ERROR: onPaint_ callback is NULL!\n");
+                firstTick_ = false;
+            }
+            else if (lmbDown && painting_) {
+                if (onPaint_)
+                    onPaint_(lastHit_.position, lastHit_.normal, false);
+            }
+        }
+
+        if (!lmbDown && painting_) {
+            painting_ = false;
+            fprintf(stderr, "[AP] STROKE END\n");
+            if (onStrokeEnd_) onStrokeEnd_();
+            else fprintf(stderr, "[AP] ERROR: onStrokeEnd_ callback is NULL!\n");
+        }
+
+        redraw();
         return;
     }
 
-    // ── Mouse event dispatch ────────────────────────────────────────────────
-    // These events only arrive if we successfully registered a pick region
-    // above during a prior draw pass.
-    if (ev == MOVE || ev == HOVER_MOVE) { handleMouseMove(ctx);   return; }
-    if (ev == PUSH)                     { handleMouseDown(ctx);   return; }
-    if (ev == DRAG)                     { handleMouseDrag(ctx);   return; }
-    if (ev == RELEASE)                  { handleMouseUp(ctx);     return; }
+    if (ev == DRAW_OVERLAY) {
+        if (debug_)
+            drawDebugOverlay();
+
+        // Always draw painted vertices as colored dots (this IS the paint visualization)
+        if (sampler_ && sampler_->pointCount() > 0) {
+            glPushAttrib(GL_ALL_ATTRIB_BITS);
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_LIGHTING);
+            glPointSize(10.0f);
+            glBegin(GL_POINTS);
+            size_t maxShow = std::min(sampler_->pointCount(), (size_t)50000);
+            for (size_t i = 0; i < maxShow; ++i) {
+                Color3f c = sampler_->getColor((uint32_t)i);
+                if (c.r > 0.01f || c.g > 0.01f || c.b > 0.01f) {
+                    Vec3f p = sampler_->getPoint((uint32_t)i);
+                    glColor4f(c.r, c.g, c.b, 1.0f);
+                    glVertex3f(p.x, p.y, p.z);
+                }
+            }
+            glEnd();
+            glPopAttrib();
+        }
+
+        if (hitValid_ && enabled_)
+            drawBrushCircle();
+        return;
+    }
 }
 
-void ViewportBrushKnob::drawBrushCircle(DD::Image::ViewerContext* ctx) const {
-    const Vec3f& c = brushState_.center;
-    const Vec3f  n = lastHit_.normal;
+// ─────────────────────────────────────────────────────────────────────────────
+//  Debug overlay
+// ─────────────────────────────────────────────────────────────────────────────
 
-    // Build an orthonormal basis on the surface (tangent, bitangent)
+void ViewportBrushKnob::drawDebugOverlay() const {
+    if (!sampler_ || !sampler_->isValid() || !matricesCached_) return;
+
+    Vec3f cen = sampler_->centroid();
+    Vec3f mn  = sampler_->bboxMin();
+    Vec3f mx  = sampler_->bboxMax();
+
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    // GREEN: mesh AABB
+    glColor4f(0.f, 1.f, 0.f, 0.6f);
+    glLineWidth(1.0f);
+    glBegin(GL_LINES);
+    glVertex3f(mn.x,mn.y,mn.z); glVertex3f(mx.x,mn.y,mn.z);
+    glVertex3f(mn.x,mx.y,mn.z); glVertex3f(mx.x,mx.y,mn.z);
+    glVertex3f(mn.x,mn.y,mx.z); glVertex3f(mx.x,mn.y,mx.z);
+    glVertex3f(mn.x,mx.y,mx.z); glVertex3f(mx.x,mx.y,mx.z);
+    glVertex3f(mn.x,mn.y,mn.z); glVertex3f(mn.x,mx.y,mn.z);
+    glVertex3f(mx.x,mn.y,mn.z); glVertex3f(mx.x,mx.y,mn.z);
+    glVertex3f(mn.x,mn.y,mx.z); glVertex3f(mn.x,mx.y,mx.z);
+    glVertex3f(mx.x,mn.y,mx.z); glVertex3f(mx.x,mx.y,mx.z);
+    glVertex3f(mn.x,mn.y,mn.z); glVertex3f(mn.x,mn.y,mx.z);
+    glVertex3f(mx.x,mn.y,mn.z); glVertex3f(mx.x,mn.y,mx.z);
+    glVertex3f(mn.x,mx.y,mn.z); glVertex3f(mn.x,mx.y,mx.z);
+    glVertex3f(mx.x,mx.y,mn.z); glVertex3f(mx.x,mx.y,mx.z);
+    glEnd();
+
+    // GREEN cross at centroid
+    float sz = std::max({mx.x-mn.x, mx.y-mn.y, mx.z-mn.z}) * 0.05f;
+    glColor4f(0.f, 1.f, 0.f, 1.f);
+    glLineWidth(2.0f);
+    glBegin(GL_LINES);
+    glVertex3f(cen.x-sz, cen.y, cen.z); glVertex3f(cen.x+sz, cen.y, cen.z);
+    glVertex3f(cen.x, cen.y-sz, cen.z); glVertex3f(cen.x, cen.y+sz, cen.z);
+    glVertex3f(cen.x, cen.y, cen.z-sz); glVertex3f(cen.x, cen.y, cen.z+sz);
+    glEnd();
+
+    // RED: ray
+    {
+        Vec3f ro = debugRay_.origin;
+        Vec3f rd = debugRay_.dir;
+        float rayLen = std::max({mx.x-mn.x, mx.y-mn.y, mx.z-mn.z}) * 3.f;
+        Vec3f farPt = ro + rd * rayLen;
+        glColor4f(1.f, 0.f, 0.f, 0.8f);
+        glLineWidth(2.0f);
+        glBegin(GL_LINES);
+        glVertex3f(ro.x, ro.y, ro.z);
+        glVertex3f(farPt.x, farPt.y, farPt.z);
+        glEnd();
+    }
+
+    // YELLOW cross at hit
+    if (hitValid_) {
+        Vec3f hp = lastHit_.position;
+        glColor4f(1.f, 1.f, 0.f, 1.f);
+        glLineWidth(3.0f);
+        glBegin(GL_LINES);
+        glVertex3f(hp.x-sz, hp.y, hp.z); glVertex3f(hp.x+sz, hp.y, hp.z);
+        glVertex3f(hp.x, hp.y-sz, hp.z); glVertex3f(hp.x, hp.y+sz, hp.z);
+        glVertex3f(hp.x, hp.y, hp.z-sz); glVertex3f(hp.x, hp.y, hp.z+sz);
+        glEnd();
+    }
+
+    // 2D overlay
+    {
+        float vpX = (float)cachedVP_[0], vpY = (float)cachedVP_[1];
+        float vpW = (float)cachedVP_[2], vpH = (float)cachedVP_[3];
+
+        glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
+        glOrtho(vpX, vpX+vpW, vpY, vpY+vpH, -1, 1);
+        glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+
+        float csx, csy;
+        if (projectToScreen(cen, csx, csy)) {
+            glColor4f(0.f, 1.f, 1.f, 1.f);
+            glPointSize(12.f);
+            glBegin(GL_POINTS); glVertex2f(csx, csy); glEnd();
+        }
+
+        glColor4f(1.f, 0.f, 1.f, 0.9f);
+        glPointSize(12.f);
+        glBegin(GL_POINTS); glVertex2f(mouseGLX_, mouseGLY_); glEnd();
+
+        glColor4f(1.f, 0.5f, 0.f, 0.9f);
+        glPointSize(8.f);
+        glBegin(GL_POINTS); glVertex2f(nukeMouseX_, nukeMouseY_); glEnd();
+
+        // Paint status indicator: green dot at top-left if painting is active
+        if (painting_) {
+            glColor4f(0.f, 1.f, 0.f, 1.f);
+            glPointSize(20.f);
+            glBegin(GL_POINTS);
+            glVertex2f(vpX + 20.f, vpY + vpH - 20.f);
+            glEnd();
+        }
+
+        glMatrixMode(GL_PROJECTION); glPopMatrix();
+        glMatrixMode(GL_MODELVIEW); glPopMatrix();
+    }
+
+    glPopAttrib();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Brush circle — uses smoothedNormal_ instead of raw face normal
+// ─────────────────────────────────────────────────────────────────────────────
+
+void ViewportBrushKnob::drawBrushCircle() const {
+    const Vec3f& c = brushState_.center;
+    const Vec3f  n = smoothedNormal_;  // smooth, not raw
+
     Vec3f up = { 0.f, 1.f, 0.f };
     if (std::abs(n.dot(up)) > 0.99f) up = {1.f, 0.f, 0.f};
 
-    // Gram-Schmidt
     float d = n.dot(up);
     Vec3f t = { up.x - n.x*d, up.y - n.y*d, up.z - n.z*d };
     float tlen = std::sqrt(t.lengthSq());
     if (tlen < 1e-8f) return;
     t = t * (1.f / tlen);
 
-    // Bitangent = n × t
     Vec3f b = { n.y*t.z - n.z*t.y,
                 n.z*t.x - n.x*t.z,
                 n.x*t.y - n.y*t.x };
 
     float r = brushState_.radius;
 
-    // ── Outer ring ──────────────────────────────────────────────────────────
     glPushAttrib(GL_LINE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_ENABLE_BIT);
-    glDisable(GL_DEPTH_TEST);   // always draw on top of mesh geometry
+    glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
     glLineWidth(2.0f);
     glColor4f(1.f, 1.f, 1.f, 0.9f);
-
     glBegin(GL_LINE_LOOP);
     for (int i = 0; i < BRUSH_CIRCLE_SEGS; ++i) {
         float theta = (float)i / (float)BRUSH_CIRCLE_SEGS * 2.f * AP_PIf;
@@ -225,13 +433,11 @@ void ViewportBrushKnob::drawBrushCircle(DD::Image::ViewerContext* ctx) const {
             c.y + (t.y * cosT + b.y * sinT) * r,
             c.z + (t.z * cosT + b.z * sinT) * r,
         };
-        // Offset slightly along normal to avoid z-fighting
-        const float BIAS = 0.0005f;
+        const float BIAS = 0.001f;
         glVertex3f(pt.x + n.x*BIAS, pt.y + n.y*BIAS, pt.z + n.z*BIAS);
     }
     glEnd();
 
-    // ── Inner ring (hardness) ────────────────────────────────────────────────
     float innerR = r * brushState_.hardness;
     glColor4f(1.f, 1.f, 0.f, 0.5f);
     glLineWidth(1.0f);
@@ -245,12 +451,12 @@ void ViewportBrushKnob::drawBrushCircle(DD::Image::ViewerContext* ctx) const {
             c.y + (t.y * cosT + b.y * sinT) * innerR,
             c.z + (t.z * cosT + b.z * sinT) * innerR,
         };
-        const float BIAS = 0.0005f;
+        const float BIAS = 0.001f;
         glVertex3f(pt.x + n.x*BIAS, pt.y + n.y*BIAS, pt.z + n.z*BIAS);
     }
     glEnd();
 
-    // ── Normal tick ──────────────────────────────────────────────────────────
+    // Normal tick
     glColor4f(0.3f, 0.8f, 1.f, 0.8f);
     glBegin(GL_LINES);
         glVertex3f(c.x, c.y, c.z);
