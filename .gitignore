@@ -1,0 +1,8 @@
+﻿build/
+*.obj
+*.tlog
+*.recipe
+*.lastbuildstate
+build_log.txt
+nuke_log.txt
+*.zip
