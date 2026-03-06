@@ -17,7 +17,6 @@
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
-#include <sstream>
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -27,7 +26,7 @@ const char* const AttributePainterOp::kFalloffNames[] = {
     "Smooth", "Linear", "Constant", "Gaussian", nullptr
 };
 const char* const AttributePainterOp::kBlendNames[] = {
-    "Replace", "Add", "Subtract", "Multiply", "Smooth", nullptr
+    "Replace", "Add", "Subtract", "Multiply", "Smooth", "Erase", nullptr
 };
 
 const DD::Image::Op::Description AttributePainterOp::description(
@@ -44,13 +43,19 @@ AttributePainterOp::AttributePainterOp(Node* node)
 AttributePainterOp::~AttributePainterOp() = default;
 
 const char* AttributePainterOp::node_help() const {
-    return "AttributePainter v0.9.1\n\nInteractive vertex colour painter.\n";
+    return
+        "AttributePainter v1.0.1\n\n"
+        "Interactive vertex colour painter for geometry in Nuke's 3D viewer.\n\n"
+        "Controls:\n"
+        "  LMB drag           - paint\n"
+        "  Shift + LMB drag   - resize brush\n"
+        "  Erase via dropdown - select Erase in Blend Mode\n";
 }
 
 void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
     GeoOp::knobs(f);
 
-    DD::Image::Text_knob(f, "v0.9.1");
+    DD::Image::Text_knob(f, "v1.0.1");
     DD::Image::Divider(f, "USD Target");
     DD::Image::String_knob(f, &k_primPath_, "prim_path", "Prim Path");
     DD::Image::String_knob(f, &k_primvarName_, "primvar_name", "Primvar Name");
@@ -112,10 +117,7 @@ bool AttributePainterOp::extractStageFromInput(DD::Image::GeometryList& geoList)
             const DD::Image::Attribute* attr = &(*ctx->attribute);
             if (attr->size() > 0) {
                 auto* stagePtr = reinterpret_cast<UsdStageRefPtr*>(attr->pointer(0));
-                if (stagePtr && *stagePtr) {
-                    stage_ = *stagePtr;
-                    return true;
-                }
+                if (stagePtr && *stagePtr) { stage_ = *stagePtr; return true; }
             }
         }
     }
@@ -128,85 +130,59 @@ bool AttributePainterOp::rebuildGeometry() {
     UsdPrim prim = stage_->GetPrimAtPath(targetPath_);
     if (!prim || !prim.IsA<UsdGeomMesh>()) return false;
     UsdGeomMesh mesh(prim);
-    VtArray<GfVec3f> vtPoints;
-    mesh.GetPointsAttr().Get(&vtPoints);
+    VtArray<GfVec3f> vtPoints; mesh.GetPointsAttr().Get(&vtPoints);
     GfMatrix4d xform = UsdGeomXformCache().GetLocalToWorldTransform(prim);
-    std::vector<Vec3f> worldPts;
-    worldPts.reserve(vtPoints.size());
+    std::vector<Vec3f> wpts; wpts.reserve(vtPoints.size());
     for (auto& p : vtPoints) {
-        GfVec3d pw = xform.Transform(GfVec3d(p[0], p[1], p[2]));
-        worldPts.push_back({ (float)pw[0], (float)pw[1], (float)pw[2] });
+        GfVec3d pw = xform.Transform(GfVec3d(p[0],p[1],p[2]));
+        wpts.push_back({(float)pw[0],(float)pw[1],(float)pw[2]});
     }
-    VtArray<int> vtCounts, vtIndices;
-    mesh.GetFaceVertexCountsAttr().Get(&vtCounts);
-    mesh.GetFaceVertexIndicesAttr().Get(&vtIndices);
-    std::vector<int> fc(vtCounts.begin(), vtCounts.end());
-    std::vector<int> fi(vtIndices.begin(), vtIndices.end());
-    sampler_->rebuild(worldPts, fc, fi);
+    VtArray<int> vc, vi;
+    mesh.GetFaceVertexCountsAttr().Get(&vc);
+    mesh.GetFaceVertexIndicesAttr().Get(&vi);
+    std::vector<int> fc(vc.begin(),vc.end()), fi(vi.begin(),vi.end());
+    sampler_->rebuild(wpts, fc, fi);
     if (brushKnob_) brushKnob_->setMeshSampler(sampler_.get());
     writer_ = std::make_unique<USDColorWriter>(k_primvarName_);
-    auto existing = writer_->read(mesh, worldPts.size());
+    auto existing = writer_->read(mesh, wpts.size());
     if (!existing.empty()) sampler_->initColors(existing);
     geometryDirty_.store(false);
     return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Helper: extract faces from a single DDImage Primitive.
-//
-//  DDImage has two kinds of primitives:
-//    1. Simple (Triangle, Polygon): vertices() gives face vertex count,
-//       vertex(i) gives the point index. One face per Primitive.
-//    2. PolyMesh: contains MULTIPLE faces. faces() gives face count,
-//       face_vertices(f) gives vertex count per face,
-//       vertex(face_vertex(f, v)) gives the point index.
-//
-//  The old code treated every Primitive as type 1, which made a single
-//  giant polygon out of a PolyMesh — wrong topology, BVH couldn't
-//  intersect it, and painting failed.
+//  Face extraction helper
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void extractFacesFromPrimitive(const DD::Image::Primitive* prim,
-                                       unsigned int npts,
-                                       unsigned int baseIdx,
+                                       unsigned int npts, unsigned int baseIdx,
                                        std::vector<int>& faceCounts,
                                        std::vector<int>& faceIndices,
                                        int& extractedFaces) {
     if (!prim) return;
-
-    // Try PolyMesh path first (multi-face primitive)
     unsigned int numFaces = 0;
     try { numFaces = prim->faces(); } catch (...) { return; }
 
     if (numFaces > 1) {
-        // PolyMesh: iterate individual faces using flat vertex array.
-        // Vertices are stored consecutively — face f starts at offset
-        // sum(face_vertices(0..f-1)) into the vertex array.
         unsigned int vertexOffset = 0;
         for (unsigned int f = 0; f < numFaces; ++f) {
             unsigned int fvCount = 0;
             try { fvCount = prim->face_vertices(f); } catch (...) { continue; }
-            if (fvCount < 3 || fvCount > 100) {
-                vertexOffset += fvCount;
-                continue;
-            }
-
+            if (fvCount < 3 || fvCount > 100) { vertexOffset += fvCount; continue; }
             faceCounts.push_back((int)fvCount);
             for (unsigned int v = 0; v < fvCount; ++v) {
-                unsigned int pointIdx = 0;
-                try { pointIdx = prim->vertex(vertexOffset + v); } catch (...) { pointIdx = 0; }
-                if (pointIdx >= npts) pointIdx = 0;
-                faceIndices.push_back((int)(baseIdx + pointIdx));
+                unsigned int pi = 0;
+                try { pi = prim->vertex(vertexOffset + v); } catch (...) { pi = 0; }
+                if (pi >= npts) pi = 0;
+                faceIndices.push_back((int)(baseIdx + pi));
             }
             vertexOffset += fvCount;
             ++extractedFaces;
         }
     } else {
-        // Simple primitive: one face, vertices() is the vertex count
         unsigned int vcount = 0;
         try { vcount = prim->vertices(); } catch (...) { return; }
         if (vcount < 3 || vcount > 10000) return;
-
         faceCounts.push_back((int)vcount);
         for (unsigned int v = 0; v < vcount; ++v) {
             unsigned int vi = 0;
@@ -246,7 +222,6 @@ void AttributePainterOp::geometry_engine(DD::Image::Scene& scene,
         const DD::Image::GeoInfo& geo = out[g];
         const DD::Image::PointList* pts = geo.point_list();
         if (!pts || pts->size() == 0) continue;
-
         unsigned int npts = (unsigned int)pts->size();
         unsigned int baseIdx = (unsigned int)worldPts.size();
         const DD::Image::Matrix4& xform = geo.matrix;
@@ -255,9 +230,9 @@ void AttributePainterOp::geometry_engine(DD::Image::Scene& scene,
             DD::Image::Vector3 local = (*pts)[i];
             DD::Image::Vector4 w4 = xform * DD::Image::Vector4(local.x, local.y, local.z, 1.0f);
             if (std::abs(w4.w) > 1e-8f)
-                worldPts.push_back({(float)(w4.x/w4.w), (float)(w4.y/w4.w), (float)(w4.z/w4.w)});
+                worldPts.push_back({(float)(w4.x/w4.w),(float)(w4.y/w4.w),(float)(w4.z/w4.w)});
             else
-                worldPts.push_back({(float)w4.x, (float)w4.y, (float)w4.z});
+                worldPts.push_back({(float)w4.x,(float)w4.y,(float)w4.z});
         }
 
         unsigned int numPrims = 0;
@@ -271,12 +246,7 @@ void AttributePainterOp::geometry_engine(DD::Image::Scene& scene,
                                        faceCounts, faceIndices, extractedFaces);
         }
 
-        fprintf(stderr, "[AP] geo[%u]: %u pts, %u prims -> %d faces extracted\n",
-                g, npts, numPrims, extractedFaces);
-
-        // Fallback: triangle soup if no faces found
         if (extractedFaces == 0 && npts >= 3 && (npts % 3 == 0)) {
-            fprintf(stderr, "[AP] geo[%u]: fallback triangle soup (%u tris)\n", g, npts/3);
             for (unsigned int i = 0; i < npts; i += 3) {
                 faceCounts.push_back(3);
                 faceIndices.push_back((int)(baseIdx + i));
@@ -313,6 +283,8 @@ void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
                     onPaintTick(pos, normal, first);
                 });
             brushKnob_->setStrokeEndCallback([this]() { onStrokeEnd(); });
+            brushKnob_->setRadiusCallback(
+                [this](float r) { onRadiusChanged(r); });
         }
     }
     syncBrushStateToKnobs();
@@ -320,8 +292,13 @@ void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
 }
 
 void AttributePainterOp::draw_handle(DD::Image::ViewerContext* ctx) {
-    if (brushKnob_)
-        brushKnob_->draw_handle(ctx);
+    if (brushKnob_) brushKnob_->draw_handle(ctx);
+}
+
+void AttributePainterOp::onRadiusChanged(float newRadius) {
+    k_radius_ = newRadius;
+    DD::Image::Knob* k = knob("radius");
+    if (k) k->set_value(newRadius);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -339,12 +316,6 @@ void AttributePainterOp::onPaintTick(const Vec3f& pos,
 
     std::vector<std::pair<uint32_t,float>> nearby;
     sampler_->verticesInRadius(pos, bs.radius, nearby);
-
-    if (firstTick) {
-        fprintf(stderr, "[AP paint] pos=(%.3f,%.3f,%.3f) radius=%.4f nearby=%zu\n",
-                pos.x, pos.y, pos.z, bs.radius, nearby.size());
-    }
-
     if (nearby.empty()) return;
 
     if (firstTick) {
@@ -353,7 +324,6 @@ void AttributePainterOp::onPaintTick(const Vec3f& pos,
         strokeTouched_.clear();
     }
 
-    int painted = 0;
     for (auto& [idx, dsq] : nearby) {
         if (strokeTouched_.find(idx) == strokeTouched_.end()) {
             strokeBefore_.push_back({ idx, sampler_->getColor(idx) });
@@ -368,13 +338,8 @@ void AttributePainterOp::onPaintTick(const Vec3f& pos,
         Color3f dst = BrushSystem::blend(bs, src, w);
         dst = BrushSystem::saturate(dst);
         sampler_->setColor(idx, dst);
-        ++painted;
 
         if (writer_) writer_->stage(idx, dst);
-    }
-
-    if (firstTick && painted > 0) {
-        fprintf(stderr, "[AP paint] painted %d verts\n", painted);
     }
 
     commitToUSD();

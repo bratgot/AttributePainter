@@ -50,13 +50,14 @@ public:
     int         knob_changed(DD::Image::Knob* k) override;
 
     void geometry_engine(DD::Image::Scene& scene,
-                         DD::Image::GeometryList& out) override;
+                         DD::Image::GeometryList& out);
     void _validate(bool for_real) override;
     void build_handles(DD::Image::ViewerContext* ctx) override;
     void draw_handle  (DD::Image::ViewerContext* ctx) override;
 
     void onPaintTick(const Vec3f& pos, const Vec3f& normal, bool firstTick);
     void onStrokeEnd();
+    void onRadiusChanged(float newRadius);
 
     bool test_input(int input, DD::Image::Op* op) const override {
         return dynamic_cast<DD::Image::GeoOp*>(op) != nullptr
@@ -75,7 +76,7 @@ private:
     int      k_blend_     = 0;
     bool     k_paintEnabled_ = true;
     bool     k_showBrush_    = true;
-    bool     k_debug_        = true;   // ON by default for this diagnostic build
+    bool     k_debug_        = false;
     std::string k_primPath_ = "/";
     std::string k_primvarName_ = "displayColor";
     bool     k_flipNormals_  = false;

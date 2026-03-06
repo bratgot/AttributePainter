@@ -33,10 +33,11 @@ class AttributePainterOp;
 
 class ViewportBrushKnob : public DD::Image::Knob {
 public:
-    using PaintCallback = std::function<void(const Vec3f& hitPos,
-                                              const Vec3f& hitNormal,
-                                              bool  isFirstTick)>;
+    using PaintCallback     = std::function<void(const Vec3f& hitPos,
+                                                  const Vec3f& hitNormal,
+                                                  bool  isFirstTick)>;
     using StrokeEndCallback = std::function<void()>;
+    using RadiusCallback    = std::function<void(float newRadius)>;
 
     ViewportBrushKnob(DD::Image::Knob_Closure* kc, AttributePainterOp* op, const char* name);
     ~ViewportBrushKnob() override = default;
@@ -52,28 +53,26 @@ public:
     void setBrushState(const BrushState& bs) { brushState_ = bs; }
     const BrushState& brushState() const { return brushState_; }
 
-    void setPaintCallback(PaintCallback cb)       { onPaint_     = std::move(cb); }
+    void setPaintCallback(PaintCallback cb)         { onPaint_     = std::move(cb); }
     void setStrokeEndCallback(StrokeEndCallback cb) { onStrokeEnd_ = std::move(cb); }
+    void setRadiusCallback(RadiusCallback cb)       { onRadius_    = std::move(cb); }
 
-    void setMeshSampler(MeshSampler* ms) { sampler_ = ms; }
-    void setEnabled(bool e) { enabled_ = e; }
-    void setDebug(bool d)   { debug_ = d; }
-
-    // Called by AttributePainterOp::onPaintTick to report how many verts
-    // were painted this frame (for visual debug feedback)
-    void reportPaintedVerts(int count) { paintedVertsThisFrame_ = count; }
+    void setMeshSampler(MeshSampler* ms)      { sampler_ = ms; }
+    void setEnabled(bool e)                    { enabled_ = e; }
+    void setDebug(bool d)                      { debug_ = d; }
 
 private:
     AttributePainterOp* op_      = nullptr;
     MeshSampler*        sampler_ = nullptr;
     BrushState          brushState_;
-    bool                enabled_   = true;
-    bool                painting_  = false;
-    bool                firstTick_ = true;
-    bool                debug_     = false;
+    bool                enabled_     = true;
+    bool                painting_    = false;
+    bool                firstTick_   = true;
+    bool                debug_       = false;
 
     PaintCallback       onPaint_;
     StrokeEndCallback   onStrokeEnd_;
+    RadiusCallback      onRadius_;
 
     float               mouseGLX_ = 0.f;
     float               mouseGLY_ = 0.f;
@@ -83,11 +82,14 @@ private:
     HitResult           lastHit_;
     bool                hitValid_ = false;
 
-    // Smoothed normal for brush orientation (lerped each frame)
     Vec3f               smoothedNormal_ = {0.f, 1.f, 0.f};
     bool                hasSmoothedNormal_ = false;
 
-    // Raw GL matrices
+    // Shift+drag brush resize state
+    bool                resizing_      = false;
+    float               resizeStartX_  = 0.f;
+    float               resizeStartRadius_ = 0.f;
+
     double              cachedMV_[16];
     double              cachedProj_[16];
     GLint               cachedVP_[4] = {};
@@ -96,15 +98,13 @@ private:
     Ray                 debugRay_ = {{0,0,0},{0,0,-1}};
     int                 debugFrame_ = 0;
 
-    // Paint feedback
-    int                 paintedVertsThisFrame_ = 0;
-
     void cacheGLMatrices();
     void updateMouseFromWin32();
     void updateHit();
     Ray  buildRay(float glX, float glY) const;
     void drawBrushCircle() const;
     void drawDebugOverlay() const;
+    void drawPaintedVertices() const;
 
     bool projectToScreen(const Vec3f& world, float& screenX, float& screenY) const;
 };
