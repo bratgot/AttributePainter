@@ -68,7 +68,7 @@ const char* AttributePainterOp::node_help() const {
 void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
     DD::Image::GeomOp::knobs(f);
 
-    DD::Image::Text_knob(f, "v1.0.6");
+    DD::Image::Text_knob(f, "v1.0.7");
     { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
       _f << "knobs() called\n"; }
 
@@ -146,10 +146,10 @@ bool AttributePainterOp::rebuildFromStage() {
     if (!usgStage_) return false;
 
     // Get mesh prim from usg stage
+    { std::ofstream _rf("C:/dev/AttributePainter/handle_debug.txt", std::ios::app); _rf << "rFS: stage=" << (bool)usgStage_ << " path=" << k_primPath_ << "\n"; }
     usg::MeshPrim mesh = usg::MeshPrim::getInStage(usgStage_, usg::Path(k_primPath_));
+    { std::ofstream _rf2("C:/dev/AttributePainter/handle_debug.txt", std::ios::app); _rf2 << "rFS: meshValid=" << mesh.isValid() << "\n"; }
     if (!mesh.isValid()) return false;
-
-    // Points
     usg::Vec3fArray pts = mesh.getPoints();
     if (pts.empty()) return false;
 
@@ -187,6 +187,8 @@ bool AttributePainterOp::rebuildFromStage() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
+    build_input_handles(ctx);
+    build_knob_handles(ctx);
     DD::Image::GeomOp::build_handles(ctx);
 
     // Lazy-init brush knob
@@ -227,7 +229,6 @@ void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
     }
 
     syncBrushStateToKnobs();
-    if (brushKnob_) brushKnob_->draw_handle(ctx);
 }
 
 void AttributePainterOp::draw_handle(DD::Image::ViewerContext* ctx) {

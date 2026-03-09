@@ -71,8 +71,6 @@ public:
     void draw_handle  (DD::Image::ViewerContext* ctx) override;
 
 protected:
-    void buildXformHandles(DD::Image::ViewerContext* ctx,
-                           const fdk::Mat4d*         localMatrix) override;
 
     void onPaintTick (const Vec3f& pos, const Vec3f& normal, bool firstTick);
     void onStrokeEnd ();

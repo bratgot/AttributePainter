@@ -217,7 +217,7 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
 
     static bool printed = false;
     if (!printed) {
-        fprintf(stderr, "=== AttributePainter v1.0.6 ===\n");
+        fprintf(stderr, "=== AttributePainter v1.0.7 ===\n");
         printed = true;
     }
 

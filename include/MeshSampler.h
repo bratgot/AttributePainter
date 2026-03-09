@@ -7,7 +7,6 @@
 #include <span>
 
 // USD forward decls
-#include <pxr/usd/usdGeom/mesh.h>
 
 namespace AP {
 
