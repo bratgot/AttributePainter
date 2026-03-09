@@ -38,6 +38,7 @@ public:
                                                   bool  isFirstTick)>;
     using StrokeEndCallback = std::function<void()>;
     using RadiusCallback    = std::function<void(float newRadius)>;
+    using RebuildCallback   = std::function<void()>;
 
     ViewportBrushKnob(DD::Image::Knob_Closure* kc, AttributePainterOp* op, const char* name);
     ~ViewportBrushKnob() override = default;
@@ -47,7 +48,9 @@ public:
     void to_script(std::ostream&, const DD::Image::OutputContext*, bool) const override {}
     bool from_script(const char*) override { return false; }
 
-    bool build_handle(DD::Image::ViewerContext*) override { return false; }
+    bool build_handle(DD::Image::ViewerContext* ctx) override {
+        return true;
+    }
     void draw_handle(DD::Image::ViewerContext* ctx) override;
 
     void setBrushState(const BrushState& bs) { brushState_ = bs; }
@@ -56,6 +59,7 @@ public:
     void setPaintCallback(PaintCallback cb)         { onPaint_     = std::move(cb); }
     void setStrokeEndCallback(StrokeEndCallback cb) { onStrokeEnd_ = std::move(cb); }
     void setRadiusCallback(RadiusCallback cb)       { onRadius_    = std::move(cb); }
+    void setRebuildCallback(RebuildCallback cb)      { onRebuild_   = std::move(cb); }
 
     void setMeshSampler(MeshSampler* ms)      { sampler_ = ms; }
     void setEnabled(bool e)                    { enabled_ = e; }
@@ -73,6 +77,7 @@ private:
     PaintCallback       onPaint_;
     StrokeEndCallback   onStrokeEnd_;
     RadiusCallback      onRadius_;
+    RebuildCallback     onRebuild_;
 
     float               mouseGLX_ = 0.f;
     float               mouseGLY_ = 0.f;

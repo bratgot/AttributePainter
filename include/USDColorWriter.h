@@ -1,37 +1,42 @@
 #pragma once
-#include "Types.h"
-#include <string>
-#include <vector>
 
-#include <pxr/usd/usd/stage.h>
-#include <pxr/usd/sdf/path.h>
-#include <pxr/usd/usdGeom/mesh.h>
-#include <pxr/usd/usdGeom/primvarsAPI.h>
+#include "Types.h"
+
+// USG
+#include <usg/geom/MeshPrim.h>
+#include <usg/geom/GprimPrim.h>
+#include <usg/geom/PrimvarsAPI.h>
+#include <usg/geom/Primvar.h>
+
+#include <vector>
+#include <string>
 
 namespace AP {
 
-class USDColorWriter {
+class USDColorWriter
+{
 public:
     explicit USDColorWriter(const std::string& primvarName = "displayColor");
 
-    std::vector<Color3f> read(const PXR_NS::UsdGeomMesh& mesh,
-                               size_t expectedCount) const;
+    // ── Read existing primvar from a usg mesh ────────────────────────────────
+    std::vector<Color3f> read(const usg::MeshPrim& mesh,
+                               size_t               expectedCount) const;
 
-    bool write(PXR_NS::UsdGeomMesh& mesh,
-               const std::vector<Color3f>& colors) const;
+    // ── Write full color buffer to usg mesh ──────────────────────────────────
+    bool write(usg::MeshPrim&                mesh,
+               const std::vector<Color3f>&  colors) const;
 
+    // ── Incremental staging (write once per stroke tick) ─────────────────────
     void stage(uint32_t vertexIndex, Color3f color);
-
-    bool commit(PXR_NS::UsdGeomMesh& mesh,
-                std::vector<Color3f>& workingColors) const;
-
+    bool commit(usg::MeshPrim&         mesh,
+                std::vector<Color3f>&  workingColors);
     void clearStaged();
 
-    const std::string& primvarName() const { return primvarName_; }
-
 private:
-    std::string primvarName_;
-    std::vector<std::pair<uint32_t, Color3f>> staged_;
+    std::string              primvarName_;
+    std::vector<VertexColor> staged_;
+
+    bool isDisplayColor() const { return primvarName_ == "displayColor"; }
 };
 
 } // namespace AP

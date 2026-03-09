@@ -70,6 +70,10 @@ find_package(OpenGL REQUIRED)
 # TBB
 set(TBB_LIB "C:/Program Files/Side Effects Software/Houdini 21.0.440/custom/houdini/dsolib/tbb.lib")
 target_link_libraries(AttributePainter PRIVATE
+    "C:/Program Files/Nuke17.0v1/FnUsdEngine.lib"
+    "C:/Program Files/Nuke17.0v1/FdkBase.2.1.lib"
+    "C:/Program Files/Nuke17.0v1/FnUsdAbstraction.lib"
+    "C:/Program Files/Nuke17.0v1/Ndk.lib"
     "${DDIMAGE_LIB}"
     "${TBB_LIB}"
     "${USD_LIB}/usd_tf.lib"

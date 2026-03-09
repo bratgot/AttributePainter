@@ -1,4 +1,5 @@
 #include "ViewportBrushKnob.h"
+#include <fstream>
 #include "AttributePainterOp.h"
 #include <DDImage/ViewerContext.h>
 #include <DDImage/Vector3.h>
@@ -153,7 +154,20 @@ Ray ViewportBrushKnob::buildRay(float glX, float glY) const {
 
 void ViewportBrushKnob::updateHit() {
     hitValid_ = false;
-    if (!sampler_ || !sampler_->isValid() || !matricesCached_) return;
+    { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
+      _f << "  drawBrush: sampler=" << (sampler_!=nullptr) << " valid=" << (sampler_&&sampler_->isValid()) << " matrices=" << matricesCached_ << "\n"; }
+    if (!sampler_ || !sampler_->isValid()) {
+        if (op_) {
+            { std::ofstream _dbg("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
+              _dbg << "  calling rebuildGeometry op=" << (void*)op_ << "\n"; }
+            op_->rebuildGeometry();
+            sampler_ = op_->getSampler();
+            { std::ofstream _dbg2("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
+              _dbg2 << "  after rebuild sampler=" << (sampler_!=nullptr) << " valid=" << (sampler_&&sampler_->isValid()) << "\n"; }
+        }
+        if (!sampler_ || !sampler_->isValid()) return;
+    }
+    if (!matricesCached_) return;
     debugRay_ = buildRay(mouseGLX_, mouseGLY_);
     lastHit_ = sampler_->intersect(debugRay_);
     hitValid_ = lastHit_.hit;
@@ -186,13 +200,24 @@ void ViewportBrushKnob::updateHit() {
 //  Note: Ctrl+LMB is NOT used — it conflicts with Nuke's viewport controls.
 // ─────────────────────────────────────────────────────────────────────────────
 
+static bool _vbk_cb(DD::Image::ViewerContext* ctx, DD::Image::Knob* k, int) {
+    static_cast<ViewportBrushKnob*>(k)->draw_handle(ctx); return true; }
+
 void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
+    { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
+      _f << "draw_handle event=" << ctx->event() << " enabled=" << enabled_ << "\n"; }
     using namespace DD::Image;
     const ViewerEvent ev = ctx->event();
 
+    // Register for ANYWHERE events (mouse move, click etc)
+    if (ev == DRAW_OPAQUE || ev == PUSH || ev == DRAG) {
+        begin_handle(Knob::ANYWHERE, ctx, _vbk_cb, 0, 0, 0, 0);
+        end_handle(ctx);
+    }
+
     static bool printed = false;
     if (!printed) {
-        fprintf(stderr, "=== AttributePainter v1.0.1 ===\n");
+        fprintf(stderr, "=== AttributePainter v1.0.6 ===\n");
         printed = true;
     }
 
@@ -295,7 +320,7 @@ void ViewportBrushKnob::drawPaintedVertices() const {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void ViewportBrushKnob::drawDebugOverlay() const {
-    if (!sampler_ || !sampler_->isValid() || !matricesCached_) return;
+    if (!matricesCached_) return;
 
     Vec3f cen=sampler_->centroid();
     Vec3f mn=sampler_->bboxMin(), mx=sampler_->bboxMax();
