@@ -209,15 +209,14 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
     using namespace DD::Image;
     const ViewerEvent ev = ctx->event();
 
-    // Register for ANYWHERE events (mouse move, click etc)
-    if (ev == DRAW_OPAQUE || ev == PUSH || ev == DRAG) {
+    if (ev == DRAW_OPAQUE) {
         begin_handle(Knob::ANYWHERE, ctx, _vbk_cb, 0, 0, 0, 0);
         end_handle(ctx);
     }
 
     static bool printed = false;
     if (!printed) {
-        fprintf(stderr, "=== AttributePainter v1.0.7 ===\n");
+        fprintf(stderr, "=== AttributePainter v1.0.8 ===\n");
         printed = true;
     }
 
@@ -277,6 +276,7 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
         redraw();
         return;
     }
+        if (op_ && op_->node_disabled()) return;
 
     if (ev == DRAW_OVERLAY) {
         if (debug_)

@@ -38,12 +38,12 @@ const DD::Image::GeomOp::Description AttributePainterOp::description(
 // ─────────────────────────────────────────────────────────────────────────────
 //  Constructor / Destructor
 // ─────────────────────────────────────────────────────────────────────────────
-
 AttributePainterOp::AttributePainterOp(Node* node)
     : DD::Image::GeomOp(node, BuildEngine<Engine>())
     , sampler_(std::make_unique<MeshSampler>())
     , writer_ (std::make_unique<USDColorWriter>())
-{}
+{
+}
 
 AttributePainterOp::~AttributePainterOp() = default;
 
@@ -67,37 +67,67 @@ const char* AttributePainterOp::node_help() const {
 
 void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
     DD::Image::GeomOp::knobs(f);
-
-    DD::Image::Text_knob(f, "v1.0.7");
     { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
       _f << "knobs() called\n"; }
 
+    // -- Title -------------------------------------------------------------
+    DD::Image::Text_knob(f, "<b><font size=5>Attribute Painter</font></b><br><font color=#aaaaaa>USD Vertex Colour Painter for Nuke 17</font>");
+    DD::Image::Divider(f, "");
+
+    // -- USD Target --------------------------------------------------------
     DD::Image::Divider(f, "USD Target");
     DD::Image::String_knob(f, &k_primPath_,    "prim_path",    "Prim Path");
+    DD::Image::Tooltip(f, "USD prim path of the mesh to paint.\\nUse Refresh to auto-detect from the connected input node.");
     DD::Image::String_knob(f, &k_primvarName_, "primvar_name", "Primvar Name");
+    DD::Image::Tooltip(f, "Name of the USD primvar to write colours into.\\nDefault: displayColor");
+    DD::Image::Button(f, "refresh_mesh", "Refresh Mesh");
+    DD::Image::Tooltip(f, "Auto-detect the prim path from the connected input node and reload the mesh.");
 
+    // -- Brush -------------------------------------------------------------
     DD::Image::Divider(f, "Brush");
     DD::Image::Bool_knob (f, &k_paintEnabled_, "paint_enabled", "Enable Paint");
+    DD::Image::Tooltip(f, "Enable or disable painting. Disabling lets you navigate without accidentally painting.");
     DD::Image::Bool_knob (f, &k_showBrush_,   "show_brush",    "Show Brush");
+    DD::Image::Tooltip(f, "Show or hide the brush circle overlay in the viewport.");
     DD::Image::Float_knob(f, &k_radius_,       "radius",        "Radius");
+    DD::Image::Tooltip(f, "Brush radius in world units.\\nShift+LMB drag horizontally to resize interactively.");
     DD::Image::SetRange(f, 0.001, 10.0);
     DD::Image::Float_knob(f, &k_strength_,     "strength",      "Strength");
+    DD::Image::Tooltip(f, "Paint strength (opacity) per tick. 1.0 = full replacement per stroke.");
     DD::Image::SetRange(f, 0.0, 1.0);
     DD::Image::Float_knob(f, &k_hardness_,     "hardness",      "Hardness");
+    DD::Image::Tooltip(f, "Inner falloff edge. 1.0 = hard edge, 0.0 = full feather.");
     DD::Image::SetRange(f, 0.0, 1.0);
     DD::Image::Enumeration_knob(f, &k_falloff_, kFalloffNames, "falloff", "Falloff");
+    DD::Image::Tooltip(f, "Falloff curve shape within the feathered region.");
     DD::Image::Enumeration_knob(f, &k_blend_,   kBlendNames,   "blend",   "Blend Mode");
+    DD::Image::Tooltip(f, "How the brush colour blends with existing vertex colours.");
     DD::Image::Color_knob(f, k_color_, "paint_color", "Color");
+    DD::Image::Tooltip(f, "Paint colour. Used as the target colour for Replace, Add, Subtract etc.");
 
     DD::Image::Divider(f, "");
     DD::Image::Bool_knob(f, &k_flipNormals_, "flip_normals", "Flip Normals");
+    DD::Image::Tooltip(f, "Flip mesh normals. Use if the brush only hits the back-face of your mesh.");
 
+    // -- Usage Notes -------------------------------------------------------
+    DD::Image::Divider(f, "How To Use");
+    DD::Image::Text_knob(f, "<font color=#cccccc><b>1.</b> Connect a USD geometry node as input<br><b>2.</b> Click <i>Refresh Mesh</i> to auto-detect the prim path<br><b>3.</b> Open the Properties panel to activate the brush<br><b>4.</b> LMB drag in the 3D viewer to paint<br><b>5.</b> Shift+LMB drag horizontally to resize brush<br><b>6.</b> Hold Alt before clicking to rotate viewport</font>");
+
+    // -- Credit ------------------------------------------------------------
+    DD::Image::Divider(f, "");
+    DD::Image::Text_knob(f, "<font color=#666666>Created by Marten Blumen&nbsp;&nbsp;|&nbsp;&nbsp;Nuke 17 NDK + USG&nbsp;&nbsp;|&nbsp;&nbsp;v1.0.9</font>");
     CustomKnob1(ViewportBrushKnob, f, this, "brush_handle");
 }
 
 int AttributePainterOp::knob_changed(DD::Image::Knob* k) {
     if (k->is("prim_path") || k->is("primvar_name")) {
         geometryDirty_.store(true);
+        return 1;
+    }
+    if (k->is("refresh_mesh")) {
+        autoDetectPrimPath();
+        geometryDirty_.store(true);
+        rebuildGeometry();
         return 1;
     }
     syncBrushStateToKnobs();
@@ -126,6 +156,25 @@ void AttributePainterOp::syncBrushStateToKnobs() {
 //  rebuildFromStage — fully usg-native, no pxr
 // ─────────────────────────────────────────────────────────────────────────────
 
+void AttributePainterOp::autoDetectPrimPath() {
+    DD::Image::Op* gIn = input(0);
+    if (!gIn) return;
+    DD::Image::Knob* inPrimPath = gIn->knob("prim_path");
+    if (!inPrimPath) return;
+    std::string path = inPrimPath->get_text(nullptr);
+    std::string nodeName = gIn->node_name();
+    size_t pos = path.find("{nodename}");
+    if (pos != std::string::npos) path.replace(pos, 10, nodeName);
+    if (path.empty()) return;
+    if (path[0] != (char)0x2F) path = "/" + path;
+    DD::Image::Knob* pk = knob("prim_path");
+    if (pk) {
+        pk->set_text(path.c_str());
+        k_primPath_ = pk->get_text(nullptr);
+    }
+    { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
+      _f << "autoDetect: " << path << " k_primPath_=" << k_primPath_ << "\n"; }
+}
 void AttributePainterOp::rebuildGeometry() {
     DD::Image::GeomOp* gIn = input0();
     { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
@@ -202,6 +251,11 @@ void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
                     onPaintTick(pos, normal, first);
                 });
             brushKnob_->setStrokeEndCallback([this]() { onStrokeEnd(); });
+            brushKnob_->setRadiusCallback([this](float r) {
+                k_radius_ = r;
+                DD::Image::Knob* rk = knob("radius");
+                if (rk) rk->set_value(r);
+            });
             brushKnob_->setRebuildCallback([this]() {
                 DD::Image::GeomOp* gIn = input0();
                 if (gIn) {

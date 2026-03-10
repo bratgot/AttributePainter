@@ -42,9 +42,25 @@ public:
     class Engine : public DD::Image::GeomOpEngine
     {
     public:
+        AttributePainterOp* op_ = nullptr;
         Engine(DD::Image::GeomOpNode* parent) : GeomOpEngine(parent) {}
         void processScenegraph(usg::GeomSceneContext& context) override {
             GeomOpEngine::processScenegraph(context);
+            if (!op_) op_ = dynamic_cast<AttributePainterOp*>(firstOp());
+            if (!op_ || !op_->sampler_ || !op_->sampler_->isValid()) return;
+            const usg::StageRef& stage = context.stage();
+            { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
+              _f << "processScenegraph: op=" << (void*)op_ << " stage=" << (bool)stage << " path=" << op_->k_primPath_ << "\n"; }
+            if (!stage) return;
+            usg::MeshPrim mesh = usg::MeshPrim::getInStage(stage, usg::Path(op_->k_primPath_));
+            { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
+              _f << "processScenegraph: meshValid=" << mesh.isValid() << " colorCount=" << op_->sampler_->colors().size() << "\n"; }
+            if (!mesh.isValid()) return;
+            const auto& colors = op_->sampler_->colors();
+            usg::Vec3fArray vtColors(colors.size());
+            for (size_t i = 0; i < colors.size(); ++i)
+                vtColors[i] = fdk::Vec3f(colors[i].r, colors[i].g, colors[i].b);
+            mesh.setDisplayColor(vtColors);
         }
     };
 
@@ -67,6 +83,7 @@ public:
     }
     void build_handles(DD::Image::ViewerContext* ctx) override;
     void rebuildGeometry();  // called by ViewportBrushKnob when sampler invalid
+    void autoDetectPrimPath();
     MeshSampler* getSampler() { return sampler_.get(); }
     void draw_handle  (DD::Image::ViewerContext* ctx) override;
 
@@ -79,7 +96,7 @@ protected:
     static const char* const kFalloffNames[];
     static const char* const kBlendNames[];
 
-private:
+public:
     // Knob storage
     const char* k_primPath_    = "/World/Mesh";
     const char* k_primvarName_ = "displayColor";
@@ -92,6 +109,7 @@ private:
     int         k_blend_       = 0;
     float       k_color_[3]    = {1.f, 1.f, 1.f};
     bool        k_flipNormals_ = false;
+    const char* k_notes_       = "";
 
     // Stage
     usg::StageRef  usgStage_;
