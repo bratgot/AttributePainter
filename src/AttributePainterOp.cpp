@@ -76,9 +76,11 @@ void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
 
     // -- USD Target --------------------------------------------------------
     DD::Image::Divider(f, "USD Target");
-    DD::Image::String_knob(f, &k_primPath_,    "prim_path",    "Prim Path");
+    static const char* primPathBuf = k_primPath_.c_str();
+    DD::Image::String_knob(f, &primPathBuf, "prim_path", "Prim Path");
     DD::Image::Tooltip(f, "USD prim path of the mesh to paint.\\nUse Refresh to auto-detect from the connected input node.");
-    DD::Image::String_knob(f, &k_primvarName_, "primvar_name", "Primvar Name");
+    static const char* primvarBuf = k_primvarName_.c_str();
+    DD::Image::String_knob(f, &primvarBuf, "primvar_name", "Primvar Name");
     DD::Image::Tooltip(f, "Name of the USD primvar to write colours into.\\nDefault: displayColor");
     DD::Image::Button(f, "refresh_mesh", "Refresh Mesh");
     DD::Image::Tooltip(f, "Auto-detect the prim path from the connected input node and reload the mesh.");
@@ -115,7 +117,7 @@ void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
 
     // -- Credit ------------------------------------------------------------
     DD::Image::Divider(f, "");
-    DD::Image::Text_knob(f, "<font color=#666666>Created by Marten Blumen&nbsp;&nbsp;|&nbsp;&nbsp;Nuke 17 NDK + USG&nbsp;&nbsp;|&nbsp;&nbsp;v1.0.9</font>");
+    DD::Image::Text_knob(f, "<font color=#666666>Created by Marten Blumen&nbsp;&nbsp;|&nbsp;&nbsp;Nuke 17 NDK + USG&nbsp;&nbsp;|&nbsp;&nbsp;v1.0.10</font>");
     CustomKnob1(ViewportBrushKnob, f, this, "brush_handle");
 }
 
@@ -304,6 +306,7 @@ void AttributePainterOp::onPaintTick(const Vec3f& pos,
 
     std::vector<std::pair<uint32_t,float>> nearby;
     sampler_->verticesInRadius(pos, bs.radius, nearby);
+    { std::ofstream _pf("C:/dev/AttributePainter/handle_debug.txt", std::ios::app); _pf << "onPaint: nearby=" << nearby.size() << " radius=" << bs.radius << " color=" << bs.color.r << "," << bs.color.g << "," << bs.color.b << "\n"; }
     if (nearby.empty()) return;
 
     if (firstTick) {

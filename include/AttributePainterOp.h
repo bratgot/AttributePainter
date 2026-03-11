@@ -45,22 +45,36 @@ public:
         AttributePainterOp* op_ = nullptr;
         Engine(DD::Image::GeomOpNode* parent) : GeomOpEngine(parent) {}
         void processScenegraph(usg::GeomSceneContext& context) override {
+            fprintf(stderr, "=== processScenegraph called ===\n");
             GeomOpEngine::processScenegraph(context);
             if (!op_) op_ = dynamic_cast<AttributePainterOp*>(firstOp());
             if (!op_ || !op_->sampler_ || !op_->sampler_->isValid()) return;
-            const usg::StageRef& stage = context.stage();
+            // Use context stage, fall back to op stage
+            const usg::StageRef& ctxStage = context.stage();
+            usg::MeshPrim mesh = usg::MeshPrim::getInStage(ctxStage, usg::Path(op_->k_primPath_));
+            if (!mesh.isValid() && op_->usgStage_)
+                mesh = usg::MeshPrim::getInStage(op_->usgStage_, usg::Path(op_->k_primPath_));
             { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
-              _f << "processScenegraph: op=" << (void*)op_ << " stage=" << (bool)stage << " path=" << op_->k_primPath_ << "\n"; }
-            if (!stage) return;
-            usg::MeshPrim mesh = usg::MeshPrim::getInStage(stage, usg::Path(op_->k_primPath_));
-            { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
-              _f << "processScenegraph: meshValid=" << mesh.isValid() << " colorCount=" << op_->sampler_->colors().size() << "\n"; }
+              _f << "processScenegraph: ctxStage=" << (bool)ctxStage << " meshValid=" << mesh.isValid() << " colors=" << op_->sampler_->colors().size() << "\n"; }
             if (!mesh.isValid()) return;
+            { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
+              const auto& cc = op_->sampler_->colors();
+              if (!cc.empty()) _f << "  color[0]=" << cc[0].r << "," << cc[0].g << "," << cc[0].b << "\n"; }
             const auto& colors = op_->sampler_->colors();
             usg::Vec3fArray vtColors(colors.size());
             for (size_t i = 0; i < colors.size(); ++i)
                 vtColors[i] = fdk::Vec3f(colors[i].r, colors[i].g, colors[i].b);
-            mesh.setDisplayColor(vtColors);
+            // Set vertex interpolation via PrimvarsAPI
+            usg::PrimvarsAPI pvAPI(static_cast<usg::Prim>(mesh));
+            usg::Primvar pv = pvAPI.createPrimvar(
+                usg::Token("displayColor"),
+                usg::Value::Type::Color3fArray,
+                usg::GeomTokens.vertex);
+            if (pv.isValid()) {
+                pv.attribute().setValue(vtColors);
+            } else {
+                mesh.setDisplayColor(vtColors);
+            }
         }
     };
 
@@ -98,8 +112,8 @@ protected:
 
 public:
     // Knob storage
-    const char* k_primPath_    = "/World/Mesh";
-    const char* k_primvarName_ = "displayColor";
+    std::string k_primPath_    = "/World/Mesh";
+    std::string k_primvarName_ = "displayColor";
     bool        k_paintEnabled_= true;
     bool        k_showBrush_   = true;
     float       k_radius_      = 0.05f;

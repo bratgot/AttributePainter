@@ -216,7 +216,7 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
 
     static bool printed = false;
     if (!printed) {
-        fprintf(stderr, "=== AttributePainter v1.0.8 ===\n");
+        fprintf(stderr, "=== AttributePainter v1.0.10 ===\n");
         printed = true;
     }
 
@@ -255,6 +255,7 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
 
         // ── Paint (only when NOT resizing) ───────────────────────────────
         if (!resizing_ && enabled_ && hitValid_) {
+                { std::ofstream _lf("C:/dev/AttributePainter/handle_debug.txt", std::ios::app); _lf << "PAINT: onPaint_set=" << (bool)onPaint_ << " hit=" << hitValid_ << " pos=" << lastHit_.position.x << "," << lastHit_.position.y << "," << lastHit_.position.z << "\n"; }
             if (lmbDown && !painting_) {
                 painting_  = true;
                 firstTick_ = true;
