@@ -27,7 +27,7 @@ const char* const AttributePainterOp::kFalloffNames[] = {
     "Smooth", "Linear", "Constant", "Gaussian", nullptr
 };
 const char* const AttributePainterOp::kBlendNames[] = {
-    "Replace", "Add", "Subtract", "Multiply", "Smooth", nullptr
+    "Replace", "Add", "Subtract", "Multiply", "Smooth", "Erase", nullptr
 };
 
 const DD::Image::GeomOp::Description AttributePainterOp::description(
@@ -83,6 +83,8 @@ void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
     DD::Image::String_knob(f, &primvarBuf, "primvar_name", "Primvar Name");
     DD::Image::Tooltip(f, "Name of the USD primvar to write colours into.\\nDefault: displayColor");
     DD::Image::Button(f, "refresh_mesh", "Refresh Mesh");
+    DD::Image::Button(f, "repaint_all",  "Repaint");
+    DD::Image::Button(f, "clear_paint",  "Clear");
     DD::Image::Tooltip(f, "Auto-detect the prim path from the connected input node and reload the mesh.");
 
     // -- Brush -------------------------------------------------------------
@@ -117,7 +119,7 @@ void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
 
     // -- Credit ------------------------------------------------------------
     DD::Image::Divider(f, "");
-    DD::Image::Text_knob(f, "<font color=#666666>Created by Marten Blumen&nbsp;&nbsp;|&nbsp;&nbsp;Nuke 17 NDK + USG&nbsp;&nbsp;|&nbsp;&nbsp;v1.0.10</font>");
+    DD::Image::Text_knob(f, "<font color=#666666>Created by Marten Blumen&nbsp;&nbsp;|&nbsp;&nbsp;Nuke 17 NDK + USG&nbsp;&nbsp;|&nbsp;&nbsp;v1.0.11</font>");
     CustomKnob1(ViewportBrushKnob, f, this, "brush_handle");
 }
 
@@ -130,6 +132,21 @@ int AttributePainterOp::knob_changed(DD::Image::Knob* k) {
         autoDetectPrimPath();
         geometryDirty_.store(true);
         rebuildGeometry();
+        return 1;
+    }
+    if (k->is("repaint_all")) {
+        invalidate();
+        return 1;
+    }
+    if (k->is("clear_paint")) {
+        if (sampler_ && sampler_->isValid()) {
+            std::vector<AP::Color3f> zeros(sampler_->colors().size(), {0,0,0});
+            sampler_->initColors(zeros);
+            writer_->clearStaged();
+            strokeBefore_.clear();
+            undoStack_.clear();
+        }
+        invalidate();
         return 1;
     }
     syncBrushStateToKnobs();

@@ -154,8 +154,6 @@ Ray ViewportBrushKnob::buildRay(float glX, float glY) const {
 
 void ViewportBrushKnob::updateHit() {
     hitValid_ = false;
-    { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
-      _f << "  drawBrush: sampler=" << (sampler_!=nullptr) << " valid=" << (sampler_&&sampler_->isValid()) << " matrices=" << matricesCached_ << "\n"; }
     if (!sampler_ || !sampler_->isValid()) {
         if (op_) {
             { std::ofstream _dbg("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
@@ -201,22 +199,27 @@ void ViewportBrushKnob::updateHit() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 static bool _vbk_cb(DD::Image::ViewerContext* ctx, DD::Image::Knob* k, int) {
+#if defined(_WIN32) || defined(_WIN64)
+    if (GetAsyncKeyState(VK_MENU) & 0x8000) return false;
+#endif
     static_cast<ViewportBrushKnob*>(k)->draw_handle(ctx); return true; }
 
 void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
-    { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
-      _f << "draw_handle event=" << ctx->event() << " enabled=" << enabled_ << "\n"; }
     using namespace DD::Image;
     const ViewerEvent ev = ctx->event();
 
+#if defined(_WIN32) || defined(_WIN64)
+    if (ev == DRAW_OPAQUE && !(GetAsyncKeyState(VK_MENU) & 0x8000)) {
+#else
     if (ev == DRAW_OPAQUE) {
+#endif
         begin_handle(Knob::ANYWHERE, ctx, _vbk_cb, 0, 0, 0, 0);
         end_handle(ctx);
     }
 
     static bool printed = false;
     if (!printed) {
-        fprintf(stderr, "=== AttributePainter v1.0.10 ===\n");
+        fprintf(stderr, "=== AttributePainter v1.0.11 ===\n");
         printed = true;
     }
 
@@ -230,9 +233,11 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
 
         bool lmbDown   = false;
         bool shiftHeld = false;
+        bool altHeld   = false;
 #if defined(_WIN32) || defined(_WIN64)
         lmbDown   = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
         shiftHeld = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) != 0;
+        altHeld   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
 #endif
 
         // ── Shift+LMB: brush resize ─────────────────────────────────────
@@ -253,9 +258,7 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
             resizing_ = false;
         }
 
-        // ── Paint (only when NOT resizing) ───────────────────────────────
-        if (!resizing_ && enabled_ && hitValid_) {
-                { std::ofstream _lf("C:/dev/AttributePainter/handle_debug.txt", std::ios::app); _lf << "PAINT: onPaint_set=" << (bool)onPaint_ << " hit=" << hitValid_ << " pos=" << lastHit_.position.x << "," << lastHit_.position.y << "," << lastHit_.position.z << "\n"; }
+        if (!resizing_ && enabled_ && hitValid_ && !altHeld) {
             if (lmbDown && !painting_) {
                 painting_  = true;
                 firstTick_ = true;
