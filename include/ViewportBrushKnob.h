@@ -62,6 +62,7 @@ public:
     void setRebuildCallback(RebuildCallback cb)      { onRebuild_   = std::move(cb); }
 
     void setMeshSampler(MeshSampler* ms)      { sampler_ = ms; }
+    void setShowVertices(bool s) { showVertices_ = s; }
     void setEnabled(bool e)                    { enabled_ = e; }
     void setDebug(bool d)                      { debug_ = d; }
 
@@ -69,6 +70,7 @@ private:
     AttributePainterOp* op_      = nullptr;
     MeshSampler*        sampler_ = nullptr;
     BrushState          brushState_;
+    bool                showVertices_= true;
     bool                enabled_     = true;
     bool                painting_    = false;
     bool                firstTick_   = true;

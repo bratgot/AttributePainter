@@ -286,7 +286,7 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
         if (debug_)
             drawDebugOverlay();
 
-        drawPaintedVertices();
+        if (showVertices_) drawPaintedVertices();
 
         if (hitValid_ && enabled_)
             drawBrushCircle();

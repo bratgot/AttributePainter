@@ -26,6 +26,9 @@ namespace AP {
 const char* const AttributePainterOp::kFalloffNames[] = {
     "Smooth", "Linear", "Constant", "Gaussian", nullptr
 };
+const char* const AttributePainterOp::kSaveFormatNames[] = {
+    "USD ASCII (.usda)", "USD Binary (.usdc)", "JSON (.json)", nullptr
+};
 const char* const AttributePainterOp::kBlendNames[] = {
     "Replace", "Add", "Subtract", "Multiply", "Smooth", "Erase", nullptr
 };
@@ -92,6 +95,8 @@ void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
     DD::Image::Bool_knob (f, &k_paintEnabled_, "paint_enabled", "Enable Paint");
     DD::Image::Tooltip(f, "Enable or disable painting. Disabling lets you navigate without accidentally painting.");
     DD::Image::Bool_knob (f, &k_showBrush_,   "show_brush",    "Show Brush");
+    DD::Image::Bool_knob (f, &k_showVertices_, "show_vertices", "Show Painted Vertices");
+    DD::Image::Tooltip(f, "Show painted vertex colour dots in the viewport.");
     DD::Image::Tooltip(f, "Show or hide the brush circle overlay in the viewport.");
     DD::Image::Float_knob(f, &k_radius_,       "radius",        "Radius");
     DD::Image::Tooltip(f, "Brush radius in world units.\\nShift+LMB drag horizontally to resize interactively.");
@@ -113,6 +118,18 @@ void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
     DD::Image::Bool_knob(f, &k_flipNormals_, "flip_normals", "Flip Normals");
     DD::Image::Tooltip(f, "Flip mesh normals. Use if the brush only hits the back-face of your mesh.");
 
+    // -- Save / Load -------------------------------------------------------
+    DD::Image::Divider(f, "Save / Load");
+    DD::Image::Enumeration_knob(f, &k_saveFormat_, kSaveFormatNames, "save_format", "Format");
+    DD::Image::Tooltip(f, "File format to save paint data. USD writes a .usda layer. JSON writes a simple array.");
+    static std::string defaultPath = std::string(getenv("TEMP") ? getenv("TEMP") : "/tmp") + "/attribute_painter_paint.usda"; // default USD ASCII
+    static const char* savePathBuf = defaultPath.c_str();
+    DD::Image::String_knob(f, &savePathBuf, "save_path", "File Path");
+    DD::Image::Tooltip(f, "Path to save/load paint data. Use .usda for USD or .json for JSON.");
+    DD::Image::Bool_knob(f, &k_autoSave_, "auto_save", "Auto Save");
+    DD::Image::Tooltip(f, "Automatically save after each stroke.");
+    DD::Image::Button(f, "save_paint", "Save");
+    DD::Image::Button(f, "load_paint", "Load");
     // -- Usage Notes -------------------------------------------------------
     DD::Image::Divider(f, "How To Use");
     DD::Image::Text_knob(f, "<font color=#cccccc><b>1.</b> Connect a USD geometry node as input<br><b>2.</b> Click <i>Refresh Mesh</i> to auto-detect the prim path<br><b>3.</b> Open the Properties panel to activate the brush<br><b>4.</b> LMB drag in the 3D viewer to paint<br><b>5.</b> Shift+LMB drag horizontally to resize brush<br><b>6.</b> Hold Alt before clicking to rotate viewport</font>");
@@ -136,6 +153,34 @@ int AttributePainterOp::knob_changed(DD::Image::Knob* k) {
     }
     if (k->is("repaint_all")) {
         invalidate();
+        return 1;
+    }
+    if (k->is("save_paint")) {
+        saveColors();
+        return 1;
+    }
+    if (k->is("load_paint")) {
+        loadColors();
+        return 1;
+    }
+    if (k->is("save_format")) {
+        DD::Image::Knob* pk = knob("save_path");
+        if (pk) {
+            const char* txt = pk->get_text(&outputContext());
+            std::string path = (txt && txt[0]) ? std::string(txt) : "";
+            // Swap extension
+            auto dot = path.rfind('.');
+            if (dot != std::string::npos) path = path.substr(0, dot);
+            else if (path.empty()) path = std::string(getenv("TEMP") ? getenv("TEMP") : "/tmp") + "/attribute_painter_paint";
+            if (k_saveFormat_ == 0) path += ".usda";
+            else if (k_saveFormat_ == 1) path += ".usdc";
+            else path += ".json";
+            pk->set_text(path.c_str());
+        }
+        return 1;
+    }
+    if (k->is("show_vertices")) {
+        if (brushKnob_) brushKnob_->setShowVertices(k_showVertices_);
         return 1;
     }
     if (k->is("clear_paint")) {
@@ -387,6 +432,117 @@ void AttributePainterOp::applyVertexColors(const std::vector<VertexColor>& vcs) 
     }
     commitToUSD();
     invalidate();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Save / Load
+// ─────────────────────────────────────────────────────────────────────────
+void AttributePainterOp::saveColors() {
+    DD::Image::Knob* pk = knob("save_path");
+    if (!pk) return;
+    std::string path = pk->get_text(nullptr);
+    if (path.empty()) { fprintf(stderr, "AttributePainter: no save path set\n"); return; }
+    if (k_saveFormat_ == 0 || k_saveFormat_ == 2) saveUSD(path);
+    if (k_saveFormat_ == 1 || k_saveFormat_ == 2) saveJSON(path);
+    fprintf(stderr, "AttributePainter: saved to %s\n", path.c_str());
+}
+
+void AttributePainterOp::loadColors() {
+    DD::Image::Knob* pk = knob("save_path");
+    if (!pk) return;
+    std::string path = pk->get_text(nullptr);
+    if (path.empty()) { fprintf(stderr, "AttributePainter: no load path set\n"); return; }
+    if (path.size() > 5 && path.substr(path.size()-5) == ".usda") loadUSD(path);
+    else loadJSON(path);
+    ++paintVersion_;
+    invalidate();
+}
+
+void AttributePainterOp::saveUSD(const std::string& basePath) {
+    if (!sampler_ || !sampler_->isValid()) return;
+    std::string path = basePath;
+    if (path.size() < 5 || path.substr(path.size()-5) != ".usda")
+        path += ".usda";
+    usg::LayerRef layer = usg::Layer::Create(path);
+    if (!layer) { fprintf(stderr, "AttributePainter: failed to create USD layer\n"); return; }
+    usg::StageRef stage = usg::Stage::Create(layer);
+    if (!stage) { fprintf(stderr, "AttributePainter: failed to create USD stage\n"); return; }
+    usg::MeshPrim mesh = usg::MeshPrim::defineInLayer(layer, usg::Path(k_primPath_));
+    if (!mesh.isValid()) { fprintf(stderr, "AttributePainter: failed to define mesh prim\n"); return; }
+    const auto& colors = sampler_->colors();
+    usg::Vec3fArray vtColors(colors.size());
+    for (size_t i = 0; i < colors.size(); ++i)
+        vtColors[i] = fdk::Vec3f(colors[i].r, colors[i].g, colors[i].b);
+    usg::PrimvarsAPI pvAPI(static_cast<usg::Prim>(mesh));
+    usg::Primvar pv = pvAPI.createPrimvar(
+        usg::Token("displayColor"),
+        usg::Value::Type::Color3fArray,
+        usg::GeomTokens.vertex);
+    if (pv.isValid()) pv.attribute().setValue(vtColors);
+    layer->exportToFile(path);
+    fprintf(stderr, "AttributePainter: saved USD to %s\n", path.c_str());
+}
+
+void AttributePainterOp::saveJSON(const std::string& basePath) {
+    if (!sampler_ || !sampler_->isValid()) return;
+    std::string path = basePath;
+    if (path.size() < 5 || path.substr(path.size()-5) != ".json")
+        path += ".json";
+    std::ofstream f(path);
+    if (!f) { fprintf(stderr, "AttributePainter: cannot write %s\n", path.c_str()); return; }
+    const auto& colors = sampler_->colors();
+    f << "{\n  \"primPath\": \"" << k_primPath_ << "\",\n";
+    f << "  \"primvarName\": \"" << k_primvarName_ << "\",\n";
+    f << "  \"interpolation\": \"vertex\",\n";
+    f << "  \"colors\": [\n";
+    for (size_t i = 0; i < colors.size(); ++i) {
+        f << "    [" << colors[i].r << "," << colors[i].g << "," << colors[i].b << "]";
+        if (i+1 < colors.size()) f << ",";
+        f << "\n";
+    }
+    f << "  ]\n}\n";
+}
+
+void AttributePainterOp::loadJSON(const std::string& path) {
+    if (!sampler_ || !sampler_->isValid()) return;
+    std::ifstream f(path);
+    if (!f) { fprintf(stderr, "AttributePainter: cannot read %s\n", path.c_str()); return; }
+    // Simple JSON parse - read all colors
+    std::vector<Color3f> loaded;
+    std::string line;
+    while (std::getline(f, line)) {
+        // Look for lines like: [r,g,b]
+        auto lb = line.find('['); auto rb = line.find(']');
+        if (lb == std::string::npos || rb == std::string::npos) continue;
+        std::string inner = line.substr(lb+1, rb-lb-1);
+        float r=0,g=0,b=0;
+        if (sscanf(inner.c_str(), "%f,%f,%f", &r, &g, &b) == 3)
+            loaded.push_back({r,g,b});
+    }
+    if (loaded.size() == sampler_->colors().size())
+        sampler_->initColors(loaded);
+    else
+        fprintf(stderr, "AttributePainter: color count mismatch %zu vs %zu\n",
+            loaded.size(), sampler_->colors().size());
+}
+
+void AttributePainterOp::loadUSD(const std::string& path) {
+    if (!sampler_ || !sampler_->isValid()) return;
+    usg::StageRef stage = usg::Stage::Open(path);
+    if (!stage) { fprintf(stderr, "AttributePainter: cannot open %s\n", path.c_str()); return; }
+    usg::MeshPrim mesh = usg::MeshPrim::getInStage(stage, usg::Path(k_primPath_));
+    if (!mesh.isValid()) { fprintf(stderr, "AttributePainter: prim not found in %s\n", path.c_str()); return; }
+    usg::PrimvarsAPI pvAPI(static_cast<usg::Prim>(mesh));
+    usg::Primvar pv(static_cast<usg::Prim>(mesh), usg::Token("displayColor"));
+    if (!pv.isValid()) return;
+    usg::Vec3fArray vals;
+    pv.attribute().getValue(vals);
+    if (vals.size() == sampler_->colors().size()) {
+        std::vector<Color3f> loaded(vals.size());
+        for (size_t i = 0; i < vals.size(); ++i)
+            loaded[i] = {vals[i].x, vals[i].y, vals[i].z};
+        sampler_->initColors(loaded);
+    }
 }
 
 } // namespace AP

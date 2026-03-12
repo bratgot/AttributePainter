@@ -109,6 +109,13 @@ protected:
 
     static const char* const kFalloffNames[];
     static const char* const kBlendNames[];
+    static const char* const kSaveFormatNames[];
+    void saveColors();
+    void loadColors();
+    void saveUSD(const std::string& path);
+    void saveJSON(const std::string& path);
+    void loadUSD(const std::string& path);
+    void loadJSON(const std::string& path);
 
 public:
     // Knob storage
@@ -123,6 +130,9 @@ public:
     int         k_blend_       = 0;
     float       k_color_[3]    = {1.f, 1.f, 1.f};
     bool        k_flipNormals_ = false;
+    bool        k_showVertices_= true;
+    int         k_saveFormat_  = 0;
+    bool        k_autoSave_    = false;
     const char* k_notes_       = "";
 
     // Stage
@@ -134,6 +144,7 @@ public:
     UndoStack                       undoStack_;
     ViewportBrushKnob*              brushKnob_  = nullptr;
     std::atomic<bool>               geometryDirty_{true};
+    std::atomic<uint32_t>           paintVersion_{0};
     std::vector<VertexColor>        strokeBefore_;
 
     void syncBrushStateToKnobs();
