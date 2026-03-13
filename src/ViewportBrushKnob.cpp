@@ -1,5 +1,4 @@
 #include "ViewportBrushKnob.h"
-#include <fstream>
 #include "AttributePainterOp.h"
 #include <DDImage/ViewerContext.h>
 #include <DDImage/Vector3.h>
@@ -113,6 +112,11 @@ ViewportBrushKnob::ViewportBrushKnob(DD::Image::Knob_Closure* kc,
 }
 
 void ViewportBrushKnob::cacheGLMatrices() {
+    // Save previous modelview for camera-change detection
+    if (matricesCached_) {
+        memcpy(prevMV_, cachedMV_, sizeof(prevMV_));
+        prevMVValid_ = true;
+    }
     glGetDoublev(GL_MODELVIEW_MATRIX,  cachedMV_);
     glGetDoublev(GL_PROJECTION_MATRIX, cachedProj_);
     glGetIntegerv(GL_VIEWPORT,         cachedVP_);
@@ -156,12 +160,8 @@ void ViewportBrushKnob::updateHit() {
     hitValid_ = false;
     if (!sampler_ || !sampler_->isValid()) {
         if (op_) {
-            { std::ofstream _dbg("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
-              _dbg << "  calling rebuildGeometry op=" << (void*)op_ << "\n"; }
             op_->rebuildGeometry();
             sampler_ = op_->getSampler();
-            { std::ofstream _dbg2("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
-              _dbg2 << "  after rebuild sampler=" << (sampler_!=nullptr) << " valid=" << (sampler_&&sampler_->isValid()) << "\n"; }
         }
         if (!sampler_ || !sampler_->isValid()) return;
     }
@@ -200,16 +200,27 @@ void ViewportBrushKnob::updateHit() {
 
 static bool _vbk_cb(DD::Image::ViewerContext* ctx, DD::Image::Knob* k, int) {
 #if defined(_WIN32) || defined(_WIN64)
-    if (GetAsyncKeyState(VK_MENU) & 0x8000) return false;
+    // Let Nuke handle viewport navigation: Alt+LMB=rotate, MMB=pan, RMB=zoom
+    if (GetAsyncKeyState(VK_MENU)    & 0x8000) return false;  // Alt held
+    if (GetAsyncKeyState(VK_MBUTTON) & 0x8000) return false;  // MMB
+    if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) return false;  // RMB
 #endif
-    static_cast<ViewportBrushKnob*>(k)->draw_handle(ctx); return true; }
+    static_cast<ViewportBrushKnob*>(k)->draw_handle(ctx);
+    return true;
+}
 
 void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
     using namespace DD::Image;
     const ViewerEvent ev = ctx->event();
 
+    // Quick check: our own node disabled
+    if (op_ && op_->node_disabled()) return;
+
 #if defined(_WIN32) || defined(_WIN64)
-    if (ev == DRAW_OPAQUE && !(GetAsyncKeyState(VK_MENU) & 0x8000)) {
+    bool navActive = (GetAsyncKeyState(VK_MENU)    & 0x8000)
+                  || (GetAsyncKeyState(VK_MBUTTON) & 0x8000)
+                  || (GetAsyncKeyState(VK_RBUTTON) & 0x8000);
+    if (ev == DRAW_OPAQUE && !navActive) {
 #else
     if (ev == DRAW_OPAQUE) {
 #endif
@@ -219,11 +230,18 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
 
     static bool printed = false;
     if (!printed) {
-        fprintf(stderr, "=== AttributePainter v1.0.11 ===\n");
+        fprintf(stderr, "=== AttributePainter v1.0.20 ===\n");
         printed = true;
     }
 
     if (ev == DRAW_OPAQUE) {
+        // Check if input geometry is actually present (handles disabled upstream)
+        inputActive_ = op_ ? op_->isInputActive() : false;
+        if (!inputActive_) {
+            redraw();  // Keep redrawing so we re-check when input comes back
+            return;
+        }
+
         cacheGLMatrices();
         updateMouseFromWin32();
         nukeMouseX_ = (float)ctx->mouse_x();
@@ -232,18 +250,44 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
         ++debugFrame_;
 
         bool lmbDown   = false;
+        bool mmbDown   = false;
+        bool rmbDown   = false;
         bool shiftHeld = false;
         bool altHeld   = false;
 #if defined(_WIN32) || defined(_WIN64)
-        lmbDown   = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-        shiftHeld = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) != 0;
-        altHeld   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
+        lmbDown   = (GetAsyncKeyState(VK_LBUTTON)  & 0x8000) != 0;
+        mmbDown   = (GetAsyncKeyState(VK_MBUTTON)  & 0x8000) != 0;
+        rmbDown   = (GetAsyncKeyState(VK_RBUTTON)  & 0x8000) != 0;
+        shiftHeld = (GetAsyncKeyState(VK_SHIFT)    & 0x8000) != 0;
+        altHeld   = (GetAsyncKeyState(VK_MENU)     & 0x8000) != 0;
 #endif
+
+        // Any viewport navigation happening — don't paint
+        bool navigating = altHeld || mmbDown || rmbDown;
+
+        // Also detect camera movement by comparing modelview matrices.
+        // If the camera moved while LMB is down, the user is navigating, not painting.
+        if (!navigating && lmbDown && prevMVValid_) {
+            bool cameraMoved = false;
+            for (int i = 0; i < 16; ++i) {
+                if (std::abs(cachedMV_[i] - prevMV_[i]) > 1e-10) {
+                    cameraMoved = true;
+                    break;
+                }
+            }
+            if (cameraMoved) navigating = true;
+        }
+
+        // If navigation starts mid-stroke, cancel the stroke immediately
+        if (navigating && painting_) {
+            painting_ = false;
+            if (onStrokeEnd_) onStrokeEnd_();
+        }
 
         // ── Shift+LMB: brush resize ─────────────────────────────────────
         // Don't return early — let DRAW_OVERLAY still run so the brush
         // circle keeps drawing under the cursor during resize.
-        if (shiftHeld && lmbDown && !painting_) {
+        if (!navigating && shiftHeld && lmbDown && !painting_) {
             if (!resizing_) {
                 resizing_ = true;
                 resizeStartX_ = mouseGLX_;
@@ -254,11 +298,11 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
             brushState_.radius = newRadius;
             if (onRadius_) onRadius_(newRadius);
         }
-        else if (resizing_ && !lmbDown) {
+        else if (resizing_ && (!lmbDown || navigating)) {
             resizing_ = false;
         }
 
-        if (!resizing_ && enabled_ && hitValid_ && !altHeld) {
+        if (!navigating && !resizing_ && enabled_ && hitValid_) {
             if (lmbDown && !painting_) {
                 painting_  = true;
                 firstTick_ = true;
@@ -280,9 +324,10 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
         redraw();
         return;
     }
-        if (op_ && op_->node_disabled()) return;
 
     if (ev == DRAW_OVERLAY) {
+        if (!inputActive_) return;
+
         if (debug_)
             drawDebugOverlay();
 

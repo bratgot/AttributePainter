@@ -26,7 +26,6 @@
 #include "UndoStack.h"
 
 #include <atomic>
-#include <fstream>
 #include <memory>
 #include <vector>
 #include <string>
@@ -43,28 +42,57 @@ public:
     {
     public:
         AttributePainterOp* op_ = nullptr;
+        usg::StageRef cachedContextStage_;  // Cached for direct writes during painting
+
         Engine(DD::Image::GeomOpNode* parent) : GeomOpEngine(parent) {}
         void processScenegraph(usg::GeomSceneContext& context) override {
-            fprintf(stderr, "=== processScenegraph called ===\n");
             GeomOpEngine::processScenegraph(context);
             if (!op_) op_ = dynamic_cast<AttributePainterOp*>(firstOp());
-            if (!op_ || !op_->sampler_ || !op_->sampler_->isValid()) return;
-            // Use context stage, fall back to op stage
-            const usg::StageRef& ctxStage = context.stage();
-            usg::MeshPrim mesh = usg::MeshPrim::getInStage(ctxStage, usg::Path(op_->k_primPath_));
+            if (!op_) return;
+
+            // Cache the context stage and engine pointer for direct writes during painting
+            cachedContextStage_ = context.stage();
+            op_->engine_ = this;
+
+            // When disabled, simply don't write colours — context stage passes through clean
+            if (op_->node_disabled()) {
+                return;
+            }
+
+            if (!op_->sampler_ || !op_->sampler_->isValid()) return;
+
+            writeColorsToContextStage();
+        }
+
+        // Write current sampler colors to the cached context stage.
+        // Called from processScenegraph AND from onPaintTick (live painting).
+        bool writeColorsToContextStage() {
+            if (!op_ || !op_->sampler_) return false;
+            return writeColors(op_->sampler_->colors());
+        }
+
+        // Write a specific color array to the cached context stage.
+        // Used to restore original colors when the node is disabled.
+        bool writeColors(const std::vector<Color3f>& colors) {
+            if (!cachedContextStage_ || !op_) return false;
+
+            usg::MeshPrim mesh = usg::MeshPrim::getInStage(
+                cachedContextStage_, usg::Path(op_->k_primPath_));
             if (!mesh.isValid() && op_->usgStage_)
-                mesh = usg::MeshPrim::getInStage(op_->usgStage_, usg::Path(op_->k_primPath_));
-            { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
-              _f << "processScenegraph: ctxStage=" << (bool)ctxStage << " meshValid=" << mesh.isValid() << " colors=" << op_->sampler_->colors().size() << "\n"; }
-            if (!mesh.isValid()) return;
-            { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
-              const auto& cc = op_->sampler_->colors();
-              if (!cc.empty()) _f << "  color[0]=" << cc[0].r << "," << cc[0].g << "," << cc[0].b << "\n"; }
-            const auto& colors = op_->sampler_->colors();
+                mesh = usg::MeshPrim::getInStage(
+                    op_->usgStage_, usg::Path(op_->k_primPath_));
+            if (!mesh.isValid()) return false;
+
+            if (colors.empty()) {
+                // Write empty array to clear the primvar display
+                mesh.setDisplayColor(usg::Vec3fArray());
+                return true;
+            }
+
             usg::Vec3fArray vtColors(colors.size());
             for (size_t i = 0; i < colors.size(); ++i)
                 vtColors[i] = fdk::Vec3f(colors[i].r, colors[i].g, colors[i].b);
-            // Set vertex interpolation via PrimvarsAPI
+
             usg::PrimvarsAPI pvAPI(static_cast<usg::Prim>(mesh));
             usg::Primvar pv = pvAPI.createPrimvar(
                 usg::Token("displayColor"),
@@ -75,6 +103,7 @@ public:
             } else {
                 mesh.setDisplayColor(vtColors);
             }
+            return true;
         }
     };
 
@@ -90,6 +119,10 @@ public:
 
     void knobs(DD::Image::Knob_Callback f) override;
     int  knob_changed(DD::Image::Knob* k) override;
+    void append(DD::Image::Hash& hash) override {
+        DD::Image::GeomOp::append(hash);
+        hash.append(paintVersion_.load());
+    }
 
     DD::Image::Op::HandlesMode doAnyHandles(DD::Image::ViewerContext* ctx) override {
         if (ctx->transform_mode() != DD::Image::VIEWER_2D) return eHandlesCooked;
@@ -100,6 +133,18 @@ public:
     void autoDetectPrimPath();
     MeshSampler* getSampler() { return sampler_.get(); }
     void draw_handle  (DD::Image::ViewerContext* ctx) override;
+
+    // Check if the input is actually producing geometry (not disabled/disconnected)
+    bool isInputActive() {
+        DD::Image::GeomOp* gIn = input0();
+        if (!gIn) return false;
+        usg::StageRef testStage;
+        usg::ArgSet testArgs;
+        gIn->buildGeometryStage(testStage, testArgs);
+        if (!testStage) return false;
+        usg::MeshPrim mesh = usg::MeshPrim::getInStage(testStage, usg::Path(k_primPath_));
+        return mesh.isValid();
+    }
 
 protected:
 
@@ -131,7 +176,7 @@ public:
     float       k_color_[3]    = {1.f, 1.f, 1.f};
     bool        k_flipNormals_ = false;
     bool        k_showVertices_= true;
-    int         k_saveFormat_  = 0;
+    int         k_saveFormat_  = 1;
     bool        k_autoSave_    = false;
     const char* k_notes_       = "";
 
@@ -143,12 +188,19 @@ public:
     std::unique_ptr<USDColorWriter> writer_;
     UndoStack                       undoStack_;
     ViewportBrushKnob*              brushKnob_  = nullptr;
+    Engine*                         engine_     = nullptr;  // Cached by processScenegraph
     std::atomic<bool>               geometryDirty_{true};
     std::atomic<uint32_t>           paintVersion_{0};
     std::vector<VertexColor>        strokeBefore_;
+    std::vector<Color3f>            originalColors_;  // Pre-paint state to restore on disable
+    bool                            hadOriginalColors_ = false;
+    bool                            wasDisabled_ = false;  // Track disable state transitions
+    DD::Image::Hash                 lastInputHash_;  // Detect input changes (transform, topology)
 
     void syncBrushStateToKnobs();
     void commitToUSD();
+    void pushColorsToHydra();  // Write sampler colors directly to cached context stage
+    void restoreOriginalColors(); // Write original colors back to context stage (on disable)
     bool rebuildFromStage();
 };
 

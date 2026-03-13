@@ -70,8 +70,6 @@ const char* AttributePainterOp::node_help() const {
 
 void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
     DD::Image::GeomOp::knobs(f);
-    { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
-      _f << "knobs() called\n"; }
 
     // -- Title -------------------------------------------------------------
     DD::Image::Text_knob(f, "<b><font size=5>Attribute Painter</font></b><br><font color=#aaaaaa>USD Vertex Colour Painter for Nuke 17</font>");
@@ -81,15 +79,14 @@ void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
     DD::Image::Divider(f, "USD Target");
     static const char* primPathBuf = k_primPath_.c_str();
     DD::Image::String_knob(f, &primPathBuf, "prim_path", "Prim Path");
-    DD::Image::Tooltip(f, "USD prim path of the mesh to paint.\\nUse Refresh to auto-detect from the connected input node.");
+    DD::Image::Tooltip(f, "USD prim path of the mesh to paint.");
+    DD::Image::Button(f, "refresh_mesh", "Refresh");
+    DD::Image::SetFlags(f, DD::Image::Knob::STARTLINE);
     static const char* primvarBuf = k_primvarName_.c_str();
     DD::Image::String_knob(f, &primvarBuf, "primvar_name", "Primvar Name");
-    DD::Image::Tooltip(f, "Name of the USD primvar to write colours into.\\nDefault: displayColor");
-    DD::Image::Button(f, "refresh_mesh", "Refresh Mesh");
-    DD::Image::Button(f, "repaint_all",  "Repaint");
-    DD::Image::Button(f, "clear_paint",  "Clear");
-    DD::Image::Tooltip(f, "Auto-detect the prim path from the connected input node and reload the mesh.");
-
+    DD::Image::Tooltip(f, "Name of the USD primvar to write colours into. Default: displayColor");
+    DD::Image::Button(f, "repaint_all", "Repaint");
+    DD::Image::Button(f, "clear_paint", "Clear");
     // -- Brush -------------------------------------------------------------
     DD::Image::Divider(f, "Brush");
     DD::Image::Bool_knob (f, &k_paintEnabled_, "paint_enabled", "Enable Paint");
@@ -122,9 +119,9 @@ void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
     DD::Image::Divider(f, "Save / Load");
     DD::Image::Enumeration_knob(f, &k_saveFormat_, kSaveFormatNames, "save_format", "Format");
     DD::Image::Tooltip(f, "File format to save paint data. USD writes a .usda layer. JSON writes a simple array.");
-    static std::string defaultPath = std::string(getenv("TEMP") ? getenv("TEMP") : "/tmp") + "/attribute_painter_paint.usda"; // default USD ASCII
+    static std::string defaultPath = std::string(getenv("TEMP") ? getenv("TEMP") : "/tmp") + "/attribute_painter_paint.usdc";
     static const char* savePathBuf = defaultPath.c_str();
-    DD::Image::String_knob(f, &savePathBuf, "save_path", "File Path");
+    DD::Image::File_knob(f, &savePathBuf, "save_path", "File Path", DD::Image::Write_File_Normal);
     DD::Image::Tooltip(f, "Path to save/load paint data. Use .usda for USD or .json for JSON.");
     DD::Image::Bool_knob(f, &k_autoSave_, "auto_save", "Auto Save");
     DD::Image::Tooltip(f, "Automatically save after each stroke.");
@@ -136,7 +133,7 @@ void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
 
     // -- Credit ------------------------------------------------------------
     DD::Image::Divider(f, "");
-    DD::Image::Text_knob(f, "<font color=#666666>Created by Marten Blumen&nbsp;&nbsp;|&nbsp;&nbsp;Nuke 17 NDK + USG&nbsp;&nbsp;|&nbsp;&nbsp;v1.0.11</font>");
+    DD::Image::Text_knob(f, "<font color=#666666>Created by Marten Blumen&nbsp;&nbsp;|&nbsp;&nbsp;Nuke 17 NDK + USG&nbsp;&nbsp;|&nbsp;&nbsp;v1.0.18</font>");
     CustomKnob1(ViewportBrushKnob, f, this, "brush_handle");
 }
 
@@ -153,6 +150,18 @@ int AttributePainterOp::knob_changed(DD::Image::Knob* k) {
     }
     if (k->is("repaint_all")) {
         invalidate();
+        return 1;
+    }
+    if (k->is("browse_path")) {
+        // Use TCL to open file browser and set knob
+        std::string cmd = std::string("set _f [tk_getSaveFile")
+            + " -title {Save Paint Data}"
+            + " -filetypes {{\"USD ASCII\" {.usda}} {\"USD Binary\" {.usdc}} {\"JSON\" {.json}}}"
+            + " -defaultextension .usda];"
+            + " if {$_f ne {}} { [python nuke.toNode(nuke.thisNode().name())\[\"save_path\"\].setValue($_f)] }";
+        script_command(cmd.c_str(), true, false);
+        const char* result = script_result(false);
+        script_unlock();
         return 1;
     }
     if (k->is("save_paint")) {
@@ -191,7 +200,10 @@ int AttributePainterOp::knob_changed(DD::Image::Knob* k) {
             strokeBefore_.clear();
             undoStack_.clear();
         }
+        pushColorsToHydra();
+        ++paintVersion_;
         invalidate();
+        asapUpdate();
         return 1;
     }
     syncBrushStateToKnobs();
@@ -236,20 +248,14 @@ void AttributePainterOp::autoDetectPrimPath() {
         pk->set_text(path.c_str());
         k_primPath_ = pk->get_text(nullptr);
     }
-    { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
-      _f << "autoDetect: " << path << " k_primPath_=" << k_primPath_ << "\n"; }
 }
 void AttributePainterOp::rebuildGeometry() {
     DD::Image::GeomOp* gIn = input0();
-    { std::ofstream _f("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
-      _f << "rebuildGeometry: gIn=" << (gIn!=nullptr) << "\n"; }
     if (gIn) {
         usg::StageRef stageRef;
         usg::ArgSet   args;
         gIn->buildGeometryStage(stageRef, args);
         usgStage_ = stageRef;
-        { std::ofstream _f2("C:/dev/AttributePainter/handle_debug.txt", std::ios::app);
-          _f2 << "rebuildGeometry: stage valid=" << (bool)usgStage_ << "\n"; }
     }
     rebuildFromStage();
     syncBrushStateToKnobs();
@@ -258,10 +264,7 @@ void AttributePainterOp::rebuildGeometry() {
 bool AttributePainterOp::rebuildFromStage() {
     if (!usgStage_) return false;
 
-    // Get mesh prim from usg stage
-    { std::ofstream _rf("C:/dev/AttributePainter/handle_debug.txt", std::ios::app); _rf << "rFS: stage=" << (bool)usgStage_ << " path=" << k_primPath_ << "\n"; }
     usg::MeshPrim mesh = usg::MeshPrim::getInStage(usgStage_, usg::Path(k_primPath_));
-    { std::ofstream _rf2("C:/dev/AttributePainter/handle_debug.txt", std::ios::app); _rf2 << "rFS: meshValid=" << mesh.isValid() << "\n"; }
     if (!mesh.isValid()) return false;
     usg::Vec3fArray pts = mesh.getPoints();
     if (pts.empty()) return false;
@@ -286,12 +289,27 @@ bool AttributePainterOp::rebuildFromStage() {
                       std::vector<int>(indices.begin(), indices.end()));
     if (brushKnob_) brushKnob_->setMeshSampler(sampler_.get());
 
-    // Existing colors
-    writer_ = std::make_unique<USDColorWriter>(k_primvarName_);
-    auto existing = writer_->read(mesh, worldPts.size());
-    if (!existing.empty()) sampler_->initColors(existing);
+    // On first build (no original colors stored yet), read from USD.
+    // On subsequent rebuilds (transform change), preserve painted colors —
+    // sampler_->rebuild already keeps colors if vertex count is unchanged.
+    if (!hadOriginalColors_) {
+        writer_ = std::make_unique<USDColorWriter>(k_primvarName_);
+        auto existing = writer_->read(mesh, worldPts.size());
+        if (!existing.empty()) {
+            sampler_->initColors(existing);
+            originalColors_ = existing;
+            hadOriginalColors_ = true;
+        } else {
+            originalColors_.assign(worldPts.size(), Color3f{0.f, 0.f, 0.f});
+            hadOriginalColors_ = true;
+        }
+    }
 
     geometryDirty_.store(false);
+    ++paintVersion_;
+    pushColorsToHydra();  // Direct write if context stage already cached
+    invalidate();         // Also trigger engine re-eval so processScenegraph runs
+    asapUpdate();
     return true;
 }
 
@@ -300,6 +318,25 @@ bool AttributePainterOp::rebuildFromStage() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
+    // Detect disable/enable transitions — walk full input chain
+    bool isDisabled = node_disabled();
+    if (!isDisabled) {
+        DD::Image::Op* op = input(0);
+        while (op) {
+            if (op->node_disabled()) { isDisabled = true; break; }
+            op = op->input(0);
+        }
+        if (!input(0)) isDisabled = true;  // No input connected
+    }
+    if (isDisabled != wasDisabled_) {
+        wasDisabled_ = isDisabled;
+        if (isDisabled) {
+            restoreOriginalColors();
+        } else {
+            pushColorsToHydra();
+        }
+    }
+
     build_input_handles(ctx);
     build_knob_handles(ctx);
     DD::Image::GeomOp::build_handles(ctx);
@@ -334,9 +371,16 @@ void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
         }
     }
 
-    // Rebuild mesh when dirty
-    if (geometryDirty_.load()) {
-        DD::Image::GeomOp* gIn = input0();
+    // Rebuild mesh when dirty OR when input has changed (transform, topology, etc.)
+    DD::Image::GeomOp* gIn = input0();
+    DD::Image::Hash inputHash;
+    if (gIn) {
+        inputHash = gIn->hash();
+    }
+    bool inputChanged = (inputHash != lastInputHash_);
+    lastInputHash_ = inputHash;
+
+    if (geometryDirty_.load() || inputChanged) {
         if (gIn) {
             usg::StageRef stageRef;
             usg::ArgSet   args;
@@ -368,7 +412,6 @@ void AttributePainterOp::onPaintTick(const Vec3f& pos,
 
     std::vector<std::pair<uint32_t,float>> nearby;
     sampler_->verticesInRadius(pos, bs.radius, nearby);
-    { std::ofstream _pf("C:/dev/AttributePainter/handle_debug.txt", std::ios::app); _pf << "onPaint: nearby=" << nearby.size() << " radius=" << bs.radius << " color=" << bs.color.r << "," << bs.color.g << "," << bs.color.b << "\n"; }
     if (nearby.empty()) return;
 
     if (firstTick) {
@@ -385,10 +428,11 @@ void AttributePainterOp::onPaintTick(const Vec3f& pos,
         Color3f dst = BrushSystem::blend(bs, src, w);
         dst = BrushSystem::saturate(dst);
         sampler_->setColor(idx, dst);
-        writer_->stage(idx, dst);
     }
 
-    commitToUSD();
+    writer_->clearStaged();
+    pushColorsToHydra();  // Write directly to Hydra's context stage only
+    ++paintVersion_;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -404,7 +448,10 @@ void AttributePainterOp::onStrokeEnd() {
     undoStack_.beginStroke(strokeBefore_);
     undoStack_.endStroke(after);
     strokeBefore_.clear();
+    pushColorsToHydra();
+    ++paintVersion_;
     invalidate();
+    asapUpdate();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -421,17 +468,44 @@ void AttributePainterOp::commitToUSD() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  pushColorsToHydra — write directly to the cached context stage
+//  Bypasses the engine re-evaluation pipeline for live interactive painting.
+// ─────────────────────────────────────────────────────────────────────────────
+
+void AttributePainterOp::pushColorsToHydra() {
+    if (node_disabled()) return;
+    if (engine_ && engine_->cachedContextStage_) {
+        engine_->writeColorsToContextStage();
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  restoreOriginalColors — write pre-paint colors back to context stage
+//  Called when the node is disabled so painted colours disappear.
+// ─────────────────────────────────────────────────────────────────────────────
+
+void AttributePainterOp::restoreOriginalColors() {
+    if (!engine_ || !engine_->cachedContextStage_) return;
+    if (hadOriginalColors_) {
+        engine_->writeColors(originalColors_);
+    } else {
+        // No original displayColor existed — write empty to clear it
+        engine_->writeColors({});
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  applyVertexColors (undo/redo)
 // ─────────────────────────────────────────────────────────────────────────────
 
 void AttributePainterOp::applyVertexColors(const std::vector<VertexColor>& vcs) {
     if (!sampler_) return;
-    for (auto& vc : vcs) {
+    for (auto& vc : vcs)
         sampler_->setColor(vc.index, vc.color);
-        writer_->stage(vc.index, vc.color);
-    }
-    commitToUSD();
+    pushColorsToHydra();
+    ++paintVersion_;
     invalidate();
+    asapUpdate();
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -454,6 +528,7 @@ void AttributePainterOp::loadColors() {
     if (path.empty()) { fprintf(stderr, "AttributePainter: no load path set\n"); return; }
     if (path.size() > 5 && path.substr(path.size()-5) == ".usda") loadUSD(path);
     else loadJSON(path);
+    pushColorsToHydra();
     ++paintVersion_;
     invalidate();
 }

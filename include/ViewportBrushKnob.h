@@ -75,6 +75,7 @@ private:
     bool                painting_    = false;
     bool                firstTick_   = true;
     bool                debug_       = false;
+    bool                inputActive_ = true;  // False when input geo not producing geometry
 
     PaintCallback       onPaint_;
     StrokeEndCallback   onStrokeEnd_;
@@ -99,6 +100,8 @@ private:
 
     double              cachedMV_[16];
     double              cachedProj_[16];
+    double              prevMV_[16];        // Previous frame's modelview for camera-change detection
+    bool                prevMVValid_ = false;
     GLint               cachedVP_[4] = {};
     bool                matricesCached_ = false;
 
