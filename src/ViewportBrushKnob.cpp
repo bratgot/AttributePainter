@@ -214,7 +214,7 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
 
     static bool printed = false;
     if (!printed) {
-        fprintf(stderr, "=== AttributePainter v1.0.23 ===\n");
+        fprintf(stderr, "=== AttributePainter v1.0.35 ===\n");
         printed = true;
     }
 
@@ -224,6 +224,21 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
         if (!inputActive_) {
             redraw();
             return;
+        }
+
+        // Track whether processScenegraph ran recently (= we're being viewed).
+        // processScenegraph sets psgFrame_ = drawFrame_. If they diverge by
+        // more than 2 frames, the viewer is looking upstream of us.
+        if (op_) {
+            ++op_->drawFrame_;
+            // Track if processScenegraph ran recently — used ONLY to hide
+            // vertex dots/brush when viewing upstream. Never wipes colors.
+            uint32_t gap = op_->drawFrame_ - op_->psgFrame_;
+            if (gap <= 5 || painting_ || resizing_) {
+                op_->viewingUs_ = true;
+            } else if (gap > 120) {
+                op_->viewingUs_ = false;
+            }
         }
 
         cacheGLMatrices();
@@ -262,7 +277,7 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
             }
         }
 
-        // Only paint with plain LMB (no modifiers except Shift for resize)
+        // Only paint with plain LMB, no navigation
         bool canPaint = lmbDown && !navigating;
 
         // Cancel active stroke if navigation starts
@@ -292,6 +307,10 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
 
         // ── Paint ────────────────────────────────────────────────────────
         if (!shiftHeld && !resizing_ && enabled_ && hitValid_ && canPaint) {
+            if (op_) {
+                op_->viewingUs_ = true;       // Painting proves we're viewed
+                op_->psgFrame_ = op_->drawFrame_; // Reset gap so it doesn't accumulate
+            }
             if (!painting_) {
                 painting_  = true;
                 firstTick_ = true;
@@ -307,6 +326,7 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
 
         if (!lmbDown && painting_) {
             painting_ = false;
+            if (op_) op_->psgFrame_ = op_->drawFrame_; // Reset gap on stroke end
             if (onStrokeEnd_) onStrokeEnd_();
         }
 
@@ -316,6 +336,8 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
 
     if (ev == DRAW_OVERLAY) {
         if (!inputActive_) return;
+        // Don't draw overlays when viewing upstream of our node
+        if (op_ && !op_->viewingUs_) return;
 
         if (debug_)
             drawDebugOverlay();

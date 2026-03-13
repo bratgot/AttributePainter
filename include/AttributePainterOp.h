@@ -50,22 +50,23 @@ public:
             if (!op_) op_ = dynamic_cast<AttributePainterOp*>(firstOp());
             if (!op_) return;
 
-            // Cache the context stage and engine pointer for direct writes during painting
             cachedContextStage_ = context.stage();
             op_->engine_ = this;
+            op_->psgFrame_ = op_->drawFrame_;  // Mark that we ran this frame
 
-            // When disabled, simply don't write colours — context stage passes through clean
-            if (op_->node_disabled()) {
-                return;
+            // Don't write when disabled
+            if (op_->node_disabled()) return;
+
+            // Write paint colors to the context stage.
+            // processScenegraph only runs when OUR node is being evaluated
+            // (viewing us or downstream), NOT when viewing upstream.
+            if (op_->sampler_ && op_->sampler_->isValid()) {
+                writeColorsToContextStage();
             }
-
-            if (!op_->sampler_ || !op_->sampler_->isValid()) return;
-
-            writeColorsToContextStage();
         }
 
         // Write current sampler colors to the cached context stage.
-        // Called from processScenegraph AND from onPaintTick (live painting).
+        // Called only from processScenegraph — the sole path for color display.
         bool writeColorsToContextStage() {
             if (!op_ || !op_->sampler_) return false;
             return writeColors(op_->sampler_->colors());
@@ -176,7 +177,7 @@ public:
     float       k_color_[3]    = {1.f, 1.f, 1.f};
     bool        k_flipNormals_ = false;
     bool        k_showVertices_= false;
-    int         k_saveFormat_  = 1;
+    int         k_saveFormat_  = 2;  // Default: USD Binary
     bool        k_autoSave_    = false;
     const char* k_notes_       = "";
 
@@ -191,6 +192,9 @@ public:
     Engine*                         engine_     = nullptr;  // Cached by processScenegraph
     std::atomic<bool>               geometryDirty_{true};
     std::atomic<uint32_t>           paintVersion_{0};
+    uint32_t                        psgFrame_ = 0;         // Set by processScenegraph each run
+    uint32_t                        drawFrame_ = 0;        // Incremented by draw_handle each DRAW_OPAQUE
+    bool                            viewingUs_ = true;     // True if processScenegraph ran recently
     std::vector<VertexColor>        strokeBefore_;
     std::vector<Color3f>            originalColors_;  // Pre-paint state to restore on disable
     bool                            hadOriginalColors_ = false;

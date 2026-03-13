@@ -27,7 +27,7 @@ const char* const AttributePainterOp::kFalloffNames[] = {
     "Smooth", "Linear", "Constant", "Gaussian", nullptr
 };
 const char* const AttributePainterOp::kSaveFormatNames[] = {
-    "USD ASCII (.usda)", "USD Binary (.usdc)", "JSON (.json)", nullptr
+    "JSON (.json)", "USD ASCII (.usda)", "USD Binary (.usdc)", nullptr
 };
 const char* const AttributePainterOp::kBlendNames[] = {
     "Replace", "Add", "Subtract", "Multiply", "Smooth", "Erase", nullptr
@@ -115,25 +115,58 @@ void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
     DD::Image::Bool_knob(f, &k_flipNormals_, "flip_normals", "Flip Normals");
     DD::Image::Tooltip(f, "Flip mesh normals. Use if the brush only hits the back-face of your mesh.");
 
-    // -- Save / Load -------------------------------------------------------
-    DD::Image::Divider(f, "Save / Load");
+    // -- Save / Load (beta) -------------------------------------------------
+    DD::Image::BeginClosedGroup(f, "save_load_group", "Save / Load <i><font color=#999999>(beta)</font></i>");
     DD::Image::Enumeration_knob(f, &k_saveFormat_, kSaveFormatNames, "save_format", "Format");
-    DD::Image::Tooltip(f, "File format to save paint data. USD writes a .usda layer. JSON writes a simple array.");
-    static std::string defaultPath = std::string(getenv("TEMP") ? getenv("TEMP") : "/tmp") + "/attribute_painter_paint.usdc";
-    static const char* savePathBuf = defaultPath.c_str();
-    DD::Image::File_knob(f, &savePathBuf, "save_path", "File Path", DD::Image::Write_File_Normal);
+    DD::Image::Tooltip(f, "File format to save paint data.");
+    {
+        static const char* _sp = "";
+        DD::Image::String_knob(f, &_sp, "save_path", "File Path");
+    }
     DD::Image::Tooltip(f, "Path to save/load paint data. Use .usda for USD or .json for JSON.");
     DD::Image::Bool_knob(f, &k_autoSave_, "auto_save", "Auto Save");
     DD::Image::Tooltip(f, "Automatically save after each stroke.");
     DD::Image::Button(f, "save_paint", "Save");
     DD::Image::Button(f, "load_paint", "Load");
-    // -- Usage Notes -------------------------------------------------------
-    DD::Image::Divider(f, "How To Use");
-    DD::Image::Text_knob(f, "<font color=#cccccc><b>1.</b> Connect a USD geometry node as input<br><b>2.</b> Click <i>Refresh Mesh</i> to auto-detect the prim path<br><b>3.</b> Open the Properties panel to activate the brush<br><b>4.</b> LMB drag in the 3D viewer to paint<br><b>5.</b> Shift+LMB drag horizontally to resize brush<br><b>6.</b> Hold Alt before clicking to rotate viewport</font>");
+    DD::Image::EndGroup(f);
+    // -- How To Use --------------------------------------------------------
+    DD::Image::BeginClosedGroup(f, "how_to_use_group", "How To Use");
+    DD::Image::Text_knob(f,
+        "<font color=#cccccc>"
+        "<b>Setup</b><br>"
+        "&bull; Connect a USD geometry node (GeoImport, ReadGeo) to the input<br>"
+        "&bull; The prim path auto-detects when you connect the pipe<br>"
+        "&bull; Click <i>Refresh</i> if the prim path needs updating<br>"
+        "<br>"
+        "<b>Painting</b><br>"
+        "&bull; <b>LMB drag</b> on the mesh in the 3D viewer to paint<br>"
+        "&bull; <b>Shift + LMB drag</b> horizontally to resize the brush<br>"
+        "&bull; <b>Alt + LMB</b> to rotate the viewport (no painting)<br>"
+        "&bull; <b>MMB</b> to pan the viewport<br>"
+        "<br>"
+        "<b>Controls</b><br>"
+        "&bull; <b>Radius</b> &mdash; brush size in world units<br>"
+        "&bull; <b>Strength</b> &mdash; paint opacity per tick (1.0 = full)<br>"
+        "&bull; <b>Hardness</b> &mdash; inner falloff edge (1.0 = hard)<br>"
+        "&bull; <b>Blend Mode</b> &mdash; Replace, Add, Subtract, Multiply, Smooth, Erase<br>"
+        "&bull; <b>Color</b> &mdash; the paint colour<br>"
+        "<br>"
+        "<b>Tips</b><br>"
+        "&bull; Disable the node to hide painted colours<br>"
+        "&bull; Use <i>Clear</i> to remove all paint<br>"
+        "&bull; <i>Flip Normals</i> if the brush only hits the back face<br>"
+        "&bull; Enable <i>Show Painted Vertices</i> to see vertex dots<br>"
+        "<br>"
+        "<b>Known Issues (WIP)</b><br>"
+        "&bull; Painted colours may persist when viewing upstream of this node.<br>"
+        "&nbsp;&nbsp;&nbsp;Disable and re-enable the AttributePainter or the input<br>"
+        "&nbsp;&nbsp;&nbsp;geometry node to clear stale colours from the viewport.<br>"
+        "</font>");
+    DD::Image::EndGroup(f);
 
     // -- Credit ------------------------------------------------------------
     DD::Image::Divider(f, "");
-    DD::Image::Text_knob(f, "<font color=#666666>Created by Marten Blumen&nbsp;&nbsp;|&nbsp;&nbsp;Nuke 17 NDK + USG&nbsp;&nbsp;|&nbsp;&nbsp;v1.0.24</font>");
+    DD::Image::Text_knob(f, "<font color=#666666>Created by Marten Blumen&nbsp;&nbsp;|&nbsp;&nbsp;Nuke 17 NDK + USG&nbsp;&nbsp;|&nbsp;&nbsp;v1.0.39</font>");
     CustomKnob1(ViewportBrushKnob, f, this, "brush_handle");
 }
 
@@ -186,15 +219,17 @@ int AttributePainterOp::knob_changed(DD::Image::Knob* k) {
     if (k->is("save_format")) {
         DD::Image::Knob* pk = knob("save_path");
         if (pk) {
-            const char* txt = pk->get_text(&outputContext());
-            std::string path = (txt && txt[0]) ? std::string(txt) : "";
-            // Swap extension
+            std::ostringstream ss;
+            pk->to_script(ss, nullptr, false);
+            std::string path = ss.str();
+            if (path.size() >= 2 && path.front() == '"' && path.back() == '"')
+                path = path.substr(1, path.size()-2);
             auto dot = path.rfind('.');
             if (dot != std::string::npos) path = path.substr(0, dot);
             else if (path.empty()) path = std::string(getenv("TEMP") ? getenv("TEMP") : "/tmp") + "/attribute_painter_paint";
-            if (k_saveFormat_ == 0) path += ".usda";
-            else if (k_saveFormat_ == 1) path += ".usdc";
-            else path += ".json";
+            if (k_saveFormat_ == 0) path += ".json";
+            else if (k_saveFormat_ == 1) path += ".usda";
+            else path += ".usdc";
             pk->set_text(path.c_str());
         }
         return 1;
@@ -211,7 +246,7 @@ int AttributePainterOp::knob_changed(DD::Image::Knob* k) {
             strokeBefore_.clear();
             undoStack_.clear();
         }
-        pushColorsToHydra();
+        pushColorsToHydra();  // Immediately update display
         ++paintVersion_;
         invalidate();
         asapUpdate();
@@ -318,8 +353,7 @@ bool AttributePainterOp::rebuildFromStage() {
 
     geometryDirty_.store(false);
     ++paintVersion_;
-    pushColorsToHydra();  // Direct write if context stage already cached
-    invalidate();         // Also trigger engine re-eval so processScenegraph runs
+    invalidate();
     asapUpdate();
     return true;
 }
@@ -344,7 +378,10 @@ void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
         if (isDisabled) {
             restoreOriginalColors();
         } else {
-            pushColorsToHydra();
+            pushColorsToHydra();  // Immediately restore paint on re-enable
+            ++paintVersion_;
+            invalidate();
+            asapUpdate();
         }
     }
 
@@ -443,8 +480,10 @@ void AttributePainterOp::onPaintTick(const Vec3f& pos,
     }
 
     writer_->clearStaged();
-    pushColorsToHydra();  // Write directly to Hydra's context stage only
     ++paintVersion_;
+    pushColorsToHydra();
+    invalidate();
+    asapUpdate();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -460,7 +499,6 @@ void AttributePainterOp::onStrokeEnd() {
     undoStack_.beginStroke(strokeBefore_);
     undoStack_.endStroke(after);
     strokeBefore_.clear();
-    pushColorsToHydra();
     ++paintVersion_;
     invalidate();
     asapUpdate();
@@ -514,7 +552,6 @@ void AttributePainterOp::applyVertexColors(const std::vector<VertexColor>& vcs) 
     if (!sampler_) return;
     for (auto& vc : vcs)
         sampler_->setColor(vc.index, vc.color);
-    pushColorsToHydra();
     ++paintVersion_;
     invalidate();
     asapUpdate();
@@ -524,32 +561,52 @@ void AttributePainterOp::applyVertexColors(const std::vector<VertexColor>& vcs) 
 //  Save / Load
 // ─────────────────────────────────────────────────────────────────────────
 void AttributePainterOp::saveColors() {
+    // Get save path from knob
     DD::Image::Knob* pk = knob("save_path");
-    if (!pk) return;
-    std::string path = pk->get_text(nullptr);
-    if (path.empty()) { fprintf(stderr, "AttributePainter: no save path set\n"); return; }
-    if (k_saveFormat_ == 0 || k_saveFormat_ == 2) saveUSD(path);
-    if (k_saveFormat_ == 1 || k_saveFormat_ == 2) saveJSON(path);
-    fprintf(stderr, "AttributePainter: saved to %s\n", path.c_str());
+    if (!pk) { fprintf(stderr, "AttributePainter: save_path knob not found\n"); return; }
+    std::ostringstream ss;
+    pk->to_script(ss, nullptr, false);
+    std::string path = ss.str();
+    // Strip quotes if present
+    if (path.size() >= 2 && path.front() == '"' && path.back() == '"')
+        path = path.substr(1, path.size()-2);
+    if (path.empty()) {
+        // Use default path and set it in the knob so user can see it
+        path = std::string(getenv("TEMP") ? getenv("TEMP") : "/tmp") + "/attribute_painter_paint.usdc";
+        pk->set_text(path.c_str());
+    }
+    if (!sampler_ || !sampler_->isValid()) { fprintf(stderr, "AttributePainter: no mesh data to save\n"); return; }
+    fprintf(stderr, "AttributePainter: saving to %s (format=%d)\n", path.c_str(), k_saveFormat_);
+    if (k_saveFormat_ == 0) saveJSON(path);
+    else saveUSD(path);
+    fprintf(stderr, "AttributePainter: save complete\n");
 }
 
 void AttributePainterOp::loadColors() {
     DD::Image::Knob* pk = knob("save_path");
     if (!pk) return;
-    std::string path = pk->get_text(nullptr);
+    std::ostringstream ss;
+    pk->to_script(ss, nullptr, false);
+    std::string path = ss.str();
+    if (path.size() >= 2 && path.front() == '"' && path.back() == '"')
+        path = path.substr(1, path.size()-2);
     if (path.empty()) { fprintf(stderr, "AttributePainter: no load path set\n"); return; }
-    if (path.size() > 5 && path.substr(path.size()-5) == ".usda") loadUSD(path);
-    else loadJSON(path);
-    pushColorsToHydra();
+    fprintf(stderr, "AttributePainter: loading from %s\n", path.c_str());
+    if (path.find(".json") != std::string::npos) loadJSON(path);
+    else loadUSD(path);
     ++paintVersion_;
     invalidate();
+    asapUpdate();
+    fprintf(stderr, "AttributePainter: load complete\n");
 }
 
 void AttributePainterOp::saveUSD(const std::string& basePath) {
     if (!sampler_ || !sampler_->isValid()) return;
     std::string path = basePath;
-    if (path.size() < 5 || path.substr(path.size()-5) != ".usda")
-        path += ".usda";
+    // Ensure a USD extension
+    bool hasUsdExt = (path.size() >= 5 &&
+        (path.substr(path.size()-5) == ".usda" || path.substr(path.size()-5) == ".usdc"));
+    if (!hasUsdExt) path += ".usda";
     usg::LayerRef layer = usg::Layer::Create(path);
     if (!layer) { fprintf(stderr, "AttributePainter: failed to create USD layer\n"); return; }
     usg::StageRef stage = usg::Stage::Create(layer);
