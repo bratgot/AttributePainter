@@ -109,10 +109,10 @@ ViewportBrushKnob::ViewportBrushKnob(DD::Image::Knob_Closure* kc,
 {
     memset(cachedMV_,0,sizeof(cachedMV_));
     memset(cachedProj_,0,sizeof(cachedProj_));
+    memset(prevMV_,0,sizeof(prevMV_));
 }
 
 void ViewportBrushKnob::cacheGLMatrices() {
-    // Save previous modelview for camera-change detection
     if (matricesCached_) {
         memcpy(prevMV_, cachedMV_, sizeof(prevMV_));
         prevMVValid_ = true;
@@ -199,14 +199,7 @@ void ViewportBrushKnob::updateHit() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 static bool _vbk_cb(DD::Image::ViewerContext* ctx, DD::Image::Knob* k, int) {
-#if defined(_WIN32) || defined(_WIN64)
-    // Let Nuke handle viewport navigation: Alt+LMB=rotate, MMB=pan, RMB=zoom
-    if (GetAsyncKeyState(VK_MENU)    & 0x8000) return false;  // Alt held
-    if (GetAsyncKeyState(VK_MBUTTON) & 0x8000) return false;  // MMB
-    if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) return false;  // RMB
-#endif
-    static_cast<ViewportBrushKnob*>(k)->draw_handle(ctx);
-    return true;
+    return false; // Never consume events — let Nuke handle navigation
 }
 
 void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
@@ -216,21 +209,12 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
     // Quick check: our own node disabled
     if (op_ && op_->node_disabled()) return;
 
-#if defined(_WIN32) || defined(_WIN64)
-    bool navActive = (GetAsyncKeyState(VK_MENU)    & 0x8000)
-                  || (GetAsyncKeyState(VK_MBUTTON) & 0x8000)
-                  || (GetAsyncKeyState(VK_RBUTTON) & 0x8000);
-    if (ev == DRAW_OPAQUE && !navActive) {
-#else
-    if (ev == DRAW_OPAQUE) {
-#endif
-        begin_handle(Knob::ANYWHERE, ctx, _vbk_cb, 0, 0, 0, 0);
-        end_handle(ctx);
-    }
+    // Do NOT register begin_handle — we don't want to steal mouse events from Nuke.
+    // All mouse interaction is done through Win32 polling below.
 
     static bool printed = false;
     if (!printed) {
-        fprintf(stderr, "=== AttributePainter v1.0.20 ===\n");
+        fprintf(stderr, "=== AttributePainter v1.0.23 ===\n");
         printed = true;
     }
 
@@ -238,7 +222,7 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
         // Check if input geometry is actually present (handles disabled upstream)
         inputActive_ = op_ ? op_->isInputActive() : false;
         if (!inputActive_) {
-            redraw();  // Keep redrawing so we re-check when input comes back
+            redraw();
             return;
         }
 
@@ -246,7 +230,7 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
         updateMouseFromWin32();
         nukeMouseX_ = (float)ctx->mouse_x();
         nukeMouseY_ = (float)ctx->mouse_y();
-        updateHit();
+        if (!resizing_) updateHit();  // Don't update hit during resize — keep brush locked
         ++debugFrame_;
 
         bool lmbDown   = false;
@@ -254,44 +238,48 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
         bool rmbDown   = false;
         bool shiftHeld = false;
         bool altHeld   = false;
+        bool ctrlHeld  = false;
 #if defined(_WIN32) || defined(_WIN64)
         lmbDown   = (GetAsyncKeyState(VK_LBUTTON)  & 0x8000) != 0;
         mmbDown   = (GetAsyncKeyState(VK_MBUTTON)  & 0x8000) != 0;
         rmbDown   = (GetAsyncKeyState(VK_RBUTTON)  & 0x8000) != 0;
         shiftHeld = (GetAsyncKeyState(VK_SHIFT)    & 0x8000) != 0;
         altHeld   = (GetAsyncKeyState(VK_MENU)     & 0x8000) != 0;
+        ctrlHeld  = (GetAsyncKeyState(VK_CONTROL)  & 0x8000) != 0;
 #endif
 
-        // Any viewport navigation happening — don't paint
-        bool navigating = altHeld || mmbDown || rmbDown;
+        // Nuke 3D viewport navigation uses: Alt+LMB, MMB, RMB, Ctrl+LMB
+        // Block ALL painting when any of these are active
+        bool navigating = altHeld || mmbDown || rmbDown || ctrlHeld;
 
-        // Also detect camera movement by comparing modelview matrices.
-        // If the camera moved while LMB is down, the user is navigating, not painting.
+        // Also block if camera moved (catches any navigation method we missed)
         if (!navigating && lmbDown && prevMVValid_) {
-            bool cameraMoved = false;
             for (int i = 0; i < 16; ++i) {
                 if (std::abs(cachedMV_[i] - prevMV_[i]) > 1e-10) {
-                    cameraMoved = true;
+                    navigating = true;
                     break;
                 }
             }
-            if (cameraMoved) navigating = true;
         }
 
-        // If navigation starts mid-stroke, cancel the stroke immediately
+        // Only paint with plain LMB (no modifiers except Shift for resize)
+        bool canPaint = lmbDown && !navigating;
+
+        // Cancel active stroke if navigation starts
         if (navigating && painting_) {
             painting_ = false;
             if (onStrokeEnd_) onStrokeEnd_();
         }
 
         // ── Shift+LMB: brush resize ─────────────────────────────────────
-        // Don't return early — let DRAW_OVERLAY still run so the brush
-        // circle keeps drawing under the cursor during resize.
-        if (!navigating && shiftHeld && lmbDown && !painting_) {
+        if (shiftHeld && canPaint && !painting_) {
             if (!resizing_) {
                 resizing_ = true;
                 resizeStartX_ = mouseGLX_;
                 resizeStartRadius_ = brushState_.radius;
+                // Lock the brush position for screen-space circle
+                resizeLockWorldPos_ = brushState_.center;
+                projectToScreen(brushState_.center, resizeLockScreenX_, resizeLockScreenY_);
             }
             float delta = (mouseGLX_ - resizeStartX_) * 0.002f;
             float newRadius = std::max(0.001f, resizeStartRadius_ + delta);
@@ -302,15 +290,16 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
             resizing_ = false;
         }
 
-        if (!navigating && !resizing_ && enabled_ && hitValid_) {
-            if (lmbDown && !painting_) {
+        // ── Paint ────────────────────────────────────────────────────────
+        if (!shiftHeld && !resizing_ && enabled_ && hitValid_ && canPaint) {
+            if (!painting_) {
                 painting_  = true;
                 firstTick_ = true;
                 if (onPaint_)
                     onPaint_(lastHit_.position, lastHit_.normal, true);
                 firstTick_ = false;
             }
-            else if (lmbDown && painting_) {
+            else {
                 if (onPaint_)
                     onPaint_(lastHit_.position, lastHit_.normal, false);
             }
@@ -333,7 +322,7 @@ void ViewportBrushKnob::draw_handle(DD::Image::ViewerContext* ctx) {
 
         if (showVertices_) drawPaintedVertices();
 
-        if (hitValid_ && enabled_)
+        if ((hitValid_ && enabled_) || resizing_)
             drawBrushCircle();
         return;
     }
@@ -445,18 +434,6 @@ void ViewportBrushKnob::drawDebugOverlay() const {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void ViewportBrushKnob::drawBrushCircle() const {
-    const Vec3f& c = brushState_.center;
-    const Vec3f  n = smoothedNormal_;
-
-    Vec3f up={0.f,1.f,0.f};
-    if (std::abs(n.dot(up))>0.99f) up={1.f,0.f,0.f};
-    float d=n.dot(up);
-    Vec3f t={up.x-n.x*d, up.y-n.y*d, up.z-n.z*d};
-    float tlen=std::sqrt(t.lengthSq());
-    if (tlen<1e-8f) return;
-    t=t*(1.f/tlen);
-    Vec3f b={n.y*t.z-n.z*t.y, n.z*t.x-n.x*t.z, n.x*t.y-n.y*t.x};
-
     float r = brushState_.radius;
 
     glPushAttrib(GL_LINE_BIT|GL_DEPTH_BUFFER_BIT|GL_COLOR_BUFFER_BIT|GL_ENABLE_BIT);
@@ -464,45 +441,107 @@ void ViewportBrushKnob::drawBrushCircle() const {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    // Outer ring — cyan during resize, white otherwise
-    if (resizing_)
+    if (resizing_) {
+        // ── Screen-space circle during resize ────────────────────────────
+        // Project the locked world position to screen, then project a point
+        // offset by the current radius to get screen-space radius in pixels.
+        float cx = resizeLockScreenX_;
+        float cy = resizeLockScreenY_;
+
+        // Get screen-space radius by projecting world radius
+        Vec3f right = {1.f, 0.f, 0.f};  // Arbitrary axis
+        Vec3f offset = resizeLockWorldPos_ + right * r;
+        float ox, oy;
+        float screenR = 50.f; // fallback
+        if (projectToScreen(offset, ox, oy)) {
+            float dx = ox - cx, dy = oy - cy;
+            screenR = std::sqrt(dx*dx + dy*dy);
+            if (screenR < 2.f) screenR = 2.f;
+        }
+
+        // Draw in screen space
+        float vpX=(float)cachedVP_[0], vpY=(float)cachedVP_[1];
+        float vpW=(float)cachedVP_[2], vpH=(float)cachedVP_[3];
+        glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
+        glOrtho(vpX, vpX+vpW, vpY, vpY+vpH, -1, 1);
+        glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+
+        // Outer ring — cyan
         glColor4f(0.f, 1.f, 1.f, 0.9f);
-    else
+        glLineWidth(2.0f);
+        glBegin(GL_LINE_LOOP);
+        for (int i = 0; i < BRUSH_CIRCLE_SEGS; ++i) {
+            float theta = (float)i / (float)BRUSH_CIRCLE_SEGS * 2.f * AP_PIf;
+            glVertex2f(cx + std::cos(theta) * screenR,
+                        cy + std::sin(theta) * screenR);
+        }
+        glEnd();
+
+        // Inner ring (hardness)
+        float innerScreenR = screenR * brushState_.hardness;
+        glColor4f(1.f, 1.f, 0.f, 0.5f); glLineWidth(1.0f);
+        glBegin(GL_LINE_LOOP);
+        for (int i = 0; i < BRUSH_CIRCLE_SEGS; ++i) {
+            float theta = (float)i / (float)BRUSH_CIRCLE_SEGS * 2.f * AP_PIf;
+            glVertex2f(cx + std::cos(theta) * innerScreenR,
+                        cy + std::sin(theta) * innerScreenR);
+        }
+        glEnd();
+
+        glMatrixMode(GL_PROJECTION); glPopMatrix();
+        glMatrixMode(GL_MODELVIEW); glPopMatrix();
+    }
+    else {
+        // ── 3D surface-aligned circle (normal painting) ──────────────────
+        const Vec3f& c = brushState_.center;
+        const Vec3f  n = smoothedNormal_;
+
+        Vec3f up={0.f,1.f,0.f};
+        if (std::abs(n.dot(up))>0.99f) up={1.f,0.f,0.f};
+        float d=n.dot(up);
+        Vec3f t={up.x-n.x*d, up.y-n.y*d, up.z-n.z*d};
+        float tlen=std::sqrt(t.lengthSq());
+        if (tlen<1e-8f) { glPopAttrib(); return; }
+        t=t*(1.f/tlen);
+        Vec3f b={n.y*t.z-n.z*t.y, n.z*t.x-n.x*t.z, n.x*t.y-n.y*t.x};
+
+        // Outer ring — white
         glColor4f(1.f, 1.f, 1.f, 0.9f);
-    glLineWidth(2.0f);
-    glBegin(GL_LINE_LOOP);
-    for (int i=0;i<BRUSH_CIRCLE_SEGS;++i) {
-        float theta=(float)i/(float)BRUSH_CIRCLE_SEGS*2.f*AP_PIf;
-        float cosT=std::cos(theta), sinT=std::sin(theta);
-        Vec3f pt={c.x+(t.x*cosT+b.x*sinT)*r,
-                  c.y+(t.y*cosT+b.y*sinT)*r,
-                  c.z+(t.z*cosT+b.z*sinT)*r};
-        const float BIAS=0.001f;
-        glVertex3f(pt.x+n.x*BIAS, pt.y+n.y*BIAS, pt.z+n.z*BIAS);
-    }
-    glEnd();
+        glLineWidth(2.0f);
+        glBegin(GL_LINE_LOOP);
+        for (int i=0;i<BRUSH_CIRCLE_SEGS;++i) {
+            float theta=(float)i/(float)BRUSH_CIRCLE_SEGS*2.f*AP_PIf;
+            float cosT=std::cos(theta), sinT=std::sin(theta);
+            Vec3f pt={c.x+(t.x*cosT+b.x*sinT)*r,
+                      c.y+(t.y*cosT+b.y*sinT)*r,
+                      c.z+(t.z*cosT+b.z*sinT)*r};
+            const float BIAS=0.001f;
+            glVertex3f(pt.x+n.x*BIAS, pt.y+n.y*BIAS, pt.z+n.z*BIAS);
+        }
+        glEnd();
 
-    // Inner ring (hardness)
-    float innerR=r*brushState_.hardness;
-    glColor4f(1.f,1.f,0.f,0.5f); glLineWidth(1.0f);
-    glBegin(GL_LINE_LOOP);
-    for (int i=0;i<BRUSH_CIRCLE_SEGS;++i) {
-        float theta=(float)i/(float)BRUSH_CIRCLE_SEGS*2.f*AP_PIf;
-        float cosT=std::cos(theta), sinT=std::sin(theta);
-        Vec3f pt={c.x+(t.x*cosT+b.x*sinT)*innerR,
-                  c.y+(t.y*cosT+b.y*sinT)*innerR,
-                  c.z+(t.z*cosT+b.z*sinT)*innerR};
-        const float BIAS=0.001f;
-        glVertex3f(pt.x+n.x*BIAS, pt.y+n.y*BIAS, pt.z+n.z*BIAS);
-    }
-    glEnd();
+        // Inner ring (hardness)
+        float innerR=r*brushState_.hardness;
+        glColor4f(1.f,1.f,0.f,0.5f); glLineWidth(1.0f);
+        glBegin(GL_LINE_LOOP);
+        for (int i=0;i<BRUSH_CIRCLE_SEGS;++i) {
+            float theta=(float)i/(float)BRUSH_CIRCLE_SEGS*2.f*AP_PIf;
+            float cosT=std::cos(theta), sinT=std::sin(theta);
+            Vec3f pt={c.x+(t.x*cosT+b.x*sinT)*innerR,
+                      c.y+(t.y*cosT+b.y*sinT)*innerR,
+                      c.z+(t.z*cosT+b.z*sinT)*innerR};
+            const float BIAS=0.001f;
+            glVertex3f(pt.x+n.x*BIAS, pt.y+n.y*BIAS, pt.z+n.z*BIAS);
+        }
+        glEnd();
 
-    // Normal tick
-    glColor4f(0.3f,0.8f,1.f,0.8f);
-    glBegin(GL_LINES);
-    glVertex3f(c.x,c.y,c.z);
-    glVertex3f(c.x+n.x*r*0.5f, c.y+n.y*r*0.5f, c.z+n.z*r*0.5f);
-    glEnd();
+        // Normal tick
+        glColor4f(0.3f,0.8f,1.f,0.8f);
+        glBegin(GL_LINES);
+        glVertex3f(c.x,c.y,c.z);
+        glVertex3f(c.x+n.x*r*0.5f, c.y+n.y*r*0.5f, c.z+n.z*r*0.5f);
+        glEnd();
+    }
 
     glPopAttrib();
 }

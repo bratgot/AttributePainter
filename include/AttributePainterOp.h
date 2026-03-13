@@ -175,7 +175,7 @@ public:
     int         k_blend_       = 0;
     float       k_color_[3]    = {1.f, 1.f, 1.f};
     bool        k_flipNormals_ = false;
-    bool        k_showVertices_= true;
+    bool        k_showVertices_= false;
     int         k_saveFormat_  = 1;
     bool        k_autoSave_    = false;
     const char* k_notes_       = "";

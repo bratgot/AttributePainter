@@ -70,7 +70,7 @@ private:
     AttributePainterOp* op_      = nullptr;
     MeshSampler*        sampler_ = nullptr;
     BrushState          brushState_;
-    bool                showVertices_= true;
+    bool                showVertices_= false;
     bool                enabled_     = true;
     bool                painting_    = false;
     bool                firstTick_   = true;
@@ -97,6 +97,9 @@ private:
     bool                resizing_      = false;
     float               resizeStartX_  = 0.f;
     float               resizeStartRadius_ = 0.f;
+    float               resizeLockScreenX_ = 0.f;  // Screen position where resize started
+    float               resizeLockScreenY_ = 0.f;
+    Vec3f               resizeLockWorldPos_ = {};   // World position locked during resize
 
     double              cachedMV_[16];
     double              cachedProj_[16];

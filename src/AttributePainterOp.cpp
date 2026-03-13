@@ -133,11 +133,22 @@ void AttributePainterOp::knobs(DD::Image::Knob_Callback f) {
 
     // -- Credit ------------------------------------------------------------
     DD::Image::Divider(f, "");
-    DD::Image::Text_knob(f, "<font color=#666666>Created by Marten Blumen&nbsp;&nbsp;|&nbsp;&nbsp;Nuke 17 NDK + USG&nbsp;&nbsp;|&nbsp;&nbsp;v1.0.18</font>");
+    DD::Image::Text_knob(f, "<font color=#666666>Created by Marten Blumen&nbsp;&nbsp;|&nbsp;&nbsp;Nuke 17 NDK + USG&nbsp;&nbsp;|&nbsp;&nbsp;v1.0.24</font>");
     CustomKnob1(ViewportBrushKnob, f, this, "brush_handle");
 }
 
 int AttributePainterOp::knob_changed(DD::Image::Knob* k) {
+    if (k->is("inputChange")) {
+        // Input pipe connected or disconnected — auto-detect prim path
+        DD::Image::GeomOp* gIn = input0();
+        if (gIn) {
+            autoDetectPrimPath();
+            hadOriginalColors_ = false;  // Re-read colors from new input
+            geometryDirty_.store(true);
+            rebuildGeometry();
+        }
+        return 1;
+    }
     if (k->is("prim_path") || k->is("primvar_name")) {
         geometryDirty_.store(true);
         return 1;
@@ -373,6 +384,7 @@ void AttributePainterOp::build_handles(DD::Image::ViewerContext* ctx) {
 
     // Rebuild mesh when dirty OR when input has changed (transform, topology, etc.)
     DD::Image::GeomOp* gIn = input0();
+
     DD::Image::Hash inputHash;
     if (gIn) {
         inputHash = gIn->hash();
